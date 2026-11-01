@@ -42,6 +42,12 @@
           }
         }
       ]
-    ]
+    ],
+    "owner": "filiocha",
+    "extra": {
+      "eas": {
+        "projectId": "35213dfb-8b0c-401c-891b-b9f7a47dca5e"
+      }
+    }
   }
 }

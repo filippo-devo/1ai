@@ -1,4 +1,4 @@
-import { THRESHOLDS, TRACKING, type ExerciseId, type ExerciseThresholds, type TrackingConfig } from './config';
+import { isRepExercise, PLANK, THRESHOLDS, TRACKING, type ExerciseId, type TrackingConfig } from './config';
 import type { Features } from './features';
 import { median, stdDev } from './geometry';
 import type { Calibration } from './repCounter';
@@ -15,21 +15,23 @@ export interface CalibrationState {
 
 /**
  * Short calibration before the workout: the user holds the start position
- * (push-up plank on straight arms / standing / dead hang) for
+ * (push-up plank on straight arms / standing / dead hang / lying / plank) for
  * TRACKING.calibrationHoldMs while all required keypoints are visible.
  * The measured start angle adapts the start threshold (see adaptThresholds).
  */
 export class Calibrator {
   private samples: { t: number; angle: number }[] = [];
   private result: Calibration | null = null;
-  private readonly th: ExerciseThresholds;
+  private readonly calibMinAngleDeg: number;
   private readonly tracking: TrackingConfig;
 
   constructor(
     readonly exercise: ExerciseId,
-    options: { thresholds?: Partial<ExerciseThresholds>; tracking?: Partial<TrackingConfig> } = {},
+    options: { calibMinAngleDeg?: number; tracking?: Partial<TrackingConfig> } = {},
   ) {
-    this.th = { ...THRESHOLDS[exercise], ...options.thresholds };
+    this.calibMinAngleDeg =
+      options.calibMinAngleDeg ??
+      (isRepExercise(exercise) ? THRESHOLDS[exercise].calibMinAngleDeg : PLANK.calibMinAngleDeg);
     this.tracking = { ...TRACKING, ...options.tracking };
   }
 
@@ -44,7 +46,7 @@ export class Calibrator {
       this.samples = [];
       return { status: 'not_visible', progress: 0, result: null, missing: f.missing };
     }
-    if (!f.postureOk || f.primary < this.th.calibMinAngleDeg) {
+    if (!f.postureOk || f.primary < this.calibMinAngleDeg) {
       this.samples = [];
       return { status: 'wrong_posture', progress: 0, result: null, missing: [] };
     }

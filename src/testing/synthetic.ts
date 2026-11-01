@@ -175,6 +175,86 @@ export function pullupSkeleton(elbowDeg: number, body: Body, origin: Point): Ske
   };
 }
 
+/**
+ * Sit-up, side view, lying on the back (head to the left, feet to the right).
+ * `hipDeg` is the shoulder–hip–knee angle (thighs fixed at 45° from the floor):
+ * ~135° lying flat, ~45° sitting upright.
+ */
+export function situpSkeleton(hipDeg: number, body: Body, origin: Point): Skeleton {
+  const floorY = origin.y;
+  const hip = { x: origin.x, y: floorY };
+  const thighAngle = rad(45);
+  const knee = { x: hip.x + body.thigh * Math.cos(thighAngle), y: hip.y - body.thigh * Math.sin(thighAngle) };
+  const kneeH = floorY - knee.y;
+  const ankle = { x: knee.x + Math.sqrt(Math.max(1, body.shin * body.shin - kneeH * kneeH)), y: floorY };
+  const torsoRaise = rad(Math.max(0, Math.min(100, 135 - hipDeg)));
+  const shoulder = { x: hip.x - body.torso * Math.cos(torsoRaise), y: hip.y - body.torso * Math.sin(torsoRaise) };
+  const dir = { x: (shoulder.x - hip.x) / body.torso, y: (shoulder.y - hip.y) / body.torso };
+  const nose = { x: shoulder.x + dir.x * 0.3 * body.torso, y: shoulder.y + dir.y * 0.3 * body.torso - 4 };
+  // Hands crossed on the chest.
+  const elbow = { x: shoulder.x - dir.x * 0.3 * body.torso + 6, y: shoulder.y - dir.y * 0.3 * body.torso - 10 };
+  const wrist = { x: shoulder.x - dir.x * 0.1 * body.torso + 4, y: shoulder.y - dir.y * 0.1 * body.torso - 14 };
+  return {
+    nose,
+    leftEye: { x: nose.x + 3, y: nose.y - 3 },
+    leftEar: { x: nose.x - 6, y: nose.y - 2 },
+    leftShoulder: shoulder,
+    leftElbow: elbow,
+    leftWrist: wrist,
+    leftHip: hip,
+    leftKnee: knee,
+    leftAnkle: ankle,
+  };
+}
+
+/**
+ * Forearm plank, side view (head to the right). `bodyDeg` is the
+ * shoulder–hip–ankle angle: 180 = straight; smaller = hips sagging.
+ */
+export function plankSkeleton(bodyDeg: number, body: Body, origin: Point): Skeleton {
+  const floorY = origin.y;
+  const elbow = { x: origin.x, y: floorY };
+  const wrist = { x: elbow.x + body.forearm, y: floorY };
+  const shoulder = { x: elbow.x, y: floorY - body.upperArm };
+  const legs = body.thigh + body.shin;
+  const total = body.torso + legs;
+  const ankle = { x: shoulder.x - Math.sqrt(Math.max(1, total * total - body.upperArm * body.upperArm)), y: floorY - 4 };
+  const lx = ankle.x - shoulder.x;
+  const ly = ankle.y - shoulder.y;
+  const len = Math.hypot(lx, ly);
+  const ux = lx / len;
+  const uy = ly / len;
+  // Perpendicular pointing down (toward the floor).
+  const nx = -uy;
+  const ny = ux;
+  const a = (body.torso / total) * len;
+  const b = len - a;
+  const angleFor = (d: number) => 180 - ((Math.atan2(d, a) + Math.atan2(d, b)) * 180) / Math.PI;
+  let lo = 0;
+  let hi = len;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (angleFor(mid) > bodyDeg) lo = mid;
+    else hi = mid;
+  }
+  const sag = (lo + hi) / 2;
+  const sign = ny >= 0 ? 1 : -1;
+  const hip = { x: shoulder.x + ux * a + sign * nx * sag, y: shoulder.y + uy * a + sign * ny * sag };
+  const knee = { x: (hip.x + ankle.x) / 2, y: (hip.y + ankle.y) / 2 };
+  const nose = { x: shoulder.x + 0.3 * body.torso, y: shoulder.y - 0.08 * body.torso };
+  return {
+    nose,
+    leftEye: { x: nose.x + 4, y: nose.y - 4 },
+    leftEar: { x: nose.x - 10, y: nose.y - 4 },
+    leftShoulder: shoulder,
+    leftElbow: elbow,
+    leftWrist: wrist,
+    leftHip: hip,
+    leftKnee: knee,
+    leftAnkle: ankle,
+  };
+}
+
 /** Rep profile: [time fraction, angle] keyframes are linearly interpolated. */
 export interface RepSpec {
   /** Angle at the start position (extended). */
@@ -270,12 +350,14 @@ const SKELETONS: Record<ExerciseId, (deg: number, body: Body, origin: Point) => 
   pushup: pushupSkeleton,
   squat: squatSkeleton,
   pullup: pullupSkeleton,
+  situp: situpSkeleton,
+  plank: plankSkeleton,
 };
 
 export function generateSequence(opts: SequenceOptions): Pose[] {
   const fps = opts.fps ?? 30;
   const body = opts.body ?? AVERAGE_BODY;
-  const isPortrait = opts.exercise !== 'pushup';
+  const isPortrait = opts.exercise === 'squat' || opts.exercise === 'pullup';
   const W = opts.imageWidth ?? (isPortrait ? 480 : 640);
   const H = opts.imageHeight ?? (isPortrait ? 640 : 480);
   const rand = rng(opts.seed ?? 1);
@@ -286,9 +368,11 @@ export function generateSequence(opts: SequenceOptions): Pose[] {
     : angleTrack(opts.reps, opts.leadInMs ?? 800, opts.leadOutMs ?? 800);
   const skeletonFn = opts.skeletonFn ?? SKELETONS[opts.exercise];
   const origin: Point =
-    opts.exercise === 'pushup'
+    opts.exercise === 'pushup' || opts.exercise === 'plank'
       ? { x: W * 0.75, y: H * 0.8 }
-      : opts.exercise === 'squat'
+      : opts.exercise === 'situp'
+        ? { x: W * 0.45, y: H * 0.8 }
+        : opts.exercise === 'squat'
         ? { x: W * 0.5, y: H * 0.88 }
         : { x: W * 0.5, y: H * 0.12 };
 

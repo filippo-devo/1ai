@@ -1,4 +1,4 @@
-import { THRESHOLDS, type ExerciseId } from '../src/counting/config';
+import { REP_EXERCISE_IDS, THRESHOLDS, type RepExerciseId } from '../src/counting/config';
 import { adaptThresholds } from '../src/counting/repCounter';
 import { runCalibration, runCounter } from '../src/testing/run';
 import {
@@ -12,19 +12,21 @@ import {
 } from '../src/testing/synthetic';
 
 /** Typical joint-angle ranges of a correct repetition per exercise. */
-const FULL: Record<ExerciseId, { topDeg: number; bottomDeg: number }> = {
+const FULL: Record<RepExerciseId, { topDeg: number; bottomDeg: number }> = {
   pushup: { topDeg: 172, bottomDeg: 80 },
   squat: { topDeg: 175, bottomDeg: 85 },
   pullup: { topDeg: 170, bottomDeg: 55 },
+  situp: { topDeg: 133, bottomDeg: 50 },
 };
 /** Clearly incomplete repetitions (not deep / high enough). */
-const HALF: Record<ExerciseId, { topDeg: number; bottomDeg: number }> = {
+const HALF: Record<RepExerciseId, { topDeg: number; bottomDeg: number }> = {
   pushup: { topDeg: 172, bottomDeg: 120 },
   squat: { topDeg: 175, bottomDeg: 130 },
   pullup: { topDeg: 170, bottomDeg: 120 },
+  situp: { topDeg: 133, bottomDeg: 100 },
 };
 
-const ALL: ExerciseId[] = ['pushup', 'squat', 'pullup'];
+const ALL: RepExerciseId[] = REP_EXERCISE_IDS;
 
 describe.each(ALL)('%s', (exercise) => {
   test('counts full repetitions', () => {
@@ -120,7 +122,7 @@ describe.each(ALL)('%s', (exercise) => {
   });
 
   test.each([
-    ['fast', exercise === 'pullup' ? 1000 : 700, 30],
+    ['fast', exercise === 'pullup' || exercise === 'situp' ? 1000 : 700, 30],
     ['slow', 5000, 30],
     ['low fps', 1500, 10],
     ['high fps', 1200, 60],

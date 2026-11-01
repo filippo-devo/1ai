@@ -1,4 +1,4 @@
-import { THRESHOLDS, TRACKING, type ExerciseId, type ExerciseThresholds, type TrackingConfig } from './config';
+import { THRESHOLDS, TRACKING, type ExerciseThresholds, type RepExerciseId, type TrackingConfig } from './config';
 import type { Features } from './features';
 import { OneEuroFilter } from './filters';
 
@@ -92,7 +92,7 @@ export class RepCounter {
   private readonly listeners: ((e: RepEvent) => void)[] = [];
 
   constructor(
-    readonly exercise: ExerciseId,
+    readonly exercise: RepExerciseId,
     options: {
       calibration?: Calibration | null;
       thresholds?: Partial<ExerciseThresholds>;

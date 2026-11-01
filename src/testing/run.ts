@@ -1,7 +1,8 @@
-import type { ExerciseId, ExerciseThresholds, TrackingConfig } from '../counting/config';
+import type { ExerciseId, ExerciseThresholds, PlankConfig, RepExerciseId, TrackingConfig } from '../counting/config';
 import { Calibrator } from '../counting/calibration';
 import { extractFeatures } from '../counting/features';
 import { RepCounter, type Calibration, type CounterSnapshot, type RepEvent } from '../counting/repCounter';
+import { PlankTimer, type PlankSnapshot } from '../counting/plankTimer';
 import type { Pose } from '../pose/types';
 
 export interface RunResult {
@@ -14,7 +15,7 @@ export interface RunResult {
 }
 
 export function runCounter(
-  exercise: ExerciseId,
+  exercise: RepExerciseId,
   poses: Pose[],
   options: {
     calibration?: Calibration | null;
@@ -43,4 +44,13 @@ export function runCalibration(exercise: ExerciseId, poses: Pose[]): Calibration
     if (s.result) return s.result;
   }
   return null;
+}
+
+export function runPlank(
+  poses: Pose[],
+  options: { calibration?: Calibration | null; config?: Partial<PlankConfig> } = {},
+): { snapshots: PlankSnapshot[]; last: PlankSnapshot } {
+  const timer = new PlankTimer(options);
+  const snapshots = poses.map((p) => timer.update(extractFeatures('plank', p), p.timestamp));
+  return { snapshots, last: snapshots[snapshots.length - 1] };
 }

@@ -16,9 +16,17 @@
  *   around a single threshold can never toggle the phase.
  */
 
-export type ExerciseId = 'pushup' | 'squat' | 'pullup';
+/** Exercises counted in repetitions (state machine in repCounter.ts). */
+export type RepExerciseId = 'pushup' | 'squat' | 'pullup' | 'situp';
+/** All exercises; 'plank' is timed (plankTimer.ts). */
+export type ExerciseId = RepExerciseId | 'plank';
 
-export const EXERCISE_IDS: ExerciseId[] = ['pushup', 'squat', 'pullup'];
+export const EXERCISE_IDS: ExerciseId[] = ['pushup', 'squat', 'pullup', 'situp', 'plank'];
+export const REP_EXERCISE_IDS: RepExerciseId[] = ['pushup', 'squat', 'pullup', 'situp'];
+
+export function isRepExercise(id: ExerciseId): id is RepExerciseId {
+  return id !== 'plank';
+}
 
 export interface ExerciseThresholds {
   /** Angle >= this => start position (extended). */
@@ -78,7 +86,7 @@ export const TRACKING: TrackingConfig = {
   calibrationMaxStdDeg: 6,
 };
 
-export const THRESHOLDS: Record<ExerciseId, ExerciseThresholds> = {
+export const THRESHOLDS: Record<RepExerciseId, ExerciseThresholds> = {
   pushup: {
     startEnterDeg: 150,
     startExitDeg: 138,
@@ -119,11 +127,64 @@ export const THRESHOLDS: Record<ExerciseId, ExerciseThresholds> = {
     minStartEnterDeg: 130,
     calibMinAngleDeg: 135,
   },
+  /**
+   * Sit-ups, side view, lying on the back with bent knees. Primary angle: hip
+   * (shoulder–hip–knee), ~135° lying, ~45° sitting up. Aux: shoulders rising
+   * above the hips ÷ torso length.
+   */
+  situp: {
+    startEnterDeg: 120,
+    startExitDeg: 110,
+    targetEnterDeg: 80,
+    targetExitDeg: 92,
+    auxTargetEnter: 0.5,
+    auxTargetExit: 0.4,
+    minRepMs: 500,
+    dwellFrames: 2,
+    calibStartMarginDeg: 10,
+    minStartEnterDeg: 105,
+    calibMinAngleDeg: 110,
+  },
+};
+
+/**
+ * Plank: time is counted only while the body line (shoulder–hip–ankle) is
+ * straight enough and the body is supported horizontally (see features.ts).
+ */
+export interface PlankConfig {
+  /** Body line angle >= this (and posture OK) => in position. */
+  bodyEnterDeg: number;
+  /** While in position, below this => out of position. */
+  bodyExitDeg: number;
+  /** A change in/out of position must last this long (debounce). */
+  enterMs: number;
+  exitMs: number;
+  /** Calibration: start position accepted from this body angle. */
+  calibMinAngleDeg: number;
+  /** Calibration may lower bodyEnterDeg to (measured - margin), not below minBodyEnterDeg. */
+  calibMarginDeg: number;
+  minBodyEnterDeg: number;
+}
+
+export const PLANK: PlankConfig = {
+  bodyEnterDeg: 160,
+  bodyExitDeg: 148,
+  enterMs: 400,
+  exitMs: 400,
+  calibMinAngleDeg: 150,
+  calibMarginDeg: 8,
+  minBodyEnterDeg: 152,
 };
 
 export interface ExerciseInfo {
   id: ExerciseId;
   name: string;
+  /** 'reps' = counted repetitions, 'hold' = time in position (plank). */
+  kind: 'reps' | 'hold';
+  /** Short subtitle on the exercise list. */
+  subtitle: string;
+  /** MaterialCommunityIcons glyph name. */
+  icon: string;
   /** Labels for the start and target phases shown in the UI. */
   startLabel: string;
   targetLabel: string;
@@ -142,6 +203,9 @@ export interface ExerciseInfo {
 export const EXERCISES: Record<ExerciseId, ExerciseInfo> = {
   pushup: {
     id: 'pushup',
+    kind: 'reps',
+    subtitle: 'Powtórzenia · widok z boku',
+    icon: 'arm-flex',
     name: 'Pompki',
     startLabel: 'Góra (ręce proste)',
     targetLabel: 'Dół',
@@ -161,6 +225,9 @@ export const EXERCISES: Record<ExerciseId, ExerciseInfo> = {
   },
   squat: {
     id: 'squat',
+    kind: 'reps',
+    subtitle: 'Powtórzenia · widok z boku lub 45°',
+    icon: 'human-handsup',
     name: 'Przysiady',
     startLabel: 'Stanie',
     targetLabel: 'Przysiad',
@@ -180,6 +247,9 @@ export const EXERCISES: Record<ExerciseId, ExerciseInfo> = {
   },
   pullup: {
     id: 'pullup',
+    kind: 'reps',
+    subtitle: 'Powtórzenia · widok z przodu',
+    icon: 'weight-lifter',
     name: 'Podciągnięcia',
     startLabel: 'Zwis (ręce proste)',
     targetLabel: 'Góra',
@@ -196,5 +266,49 @@ export const EXERCISES: Record<ExerciseId, ExerciseInfo> = {
       ],
     },
     postureHint: 'Złap drążek i zawiśnij na prostych rękach (dłonie nad barkami).',
+  },
+  situp: {
+    id: 'situp',
+    kind: 'reps',
+    subtitle: 'Powtórzenia · widok z boku',
+    icon: 'human-male-board',
+    name: 'Brzuszki',
+    startLabel: 'Leżenie',
+    targetLabel: 'Siad',
+    primaryLabel: 'Kąt bioder',
+    auxLabel: 'Uniesienie barków',
+    setup: {
+      phoneOrientation: 'Telefon poziomo (landscape), oparty stabilnie na podłodze.',
+      distance: 'Ok. 1,5–2,5 m od Ciebie.',
+      angle: 'Kamera z boku (prostopadle do ciała), nisko nad podłogą.',
+      bodyParts: 'W kadrze: barki, biodra, kolana i kostki.',
+      tips: [
+        'Leż na plecach, kolana zgięte, stopy na podłodze. Zaliczany jest pełny siad: tułów wysoko uniesiony, potem powrót do leżenia.',
+        'Kalibracja: połóż się w pozycji startowej i wytrzymaj ok. 1–2 s.',
+      ],
+    },
+    postureHint: 'Połóż się na plecach bokiem do kamery, kolana zgięte, stopy na podłodze.',
+  },
+  plank: {
+    id: 'plank',
+    kind: 'hold',
+    subtitle: 'Czas w pozycji · widok z boku',
+    icon: 'timer-outline',
+    name: 'Deska',
+    startLabel: 'Deska',
+    targetLabel: 'Deska',
+    primaryLabel: 'Linia ciała',
+    auxLabel: '–',
+    setup: {
+      phoneOrientation: 'Telefon poziomo (landscape), oparty stabilnie na podłodze.',
+      distance: 'Ok. 1,5–2,5 m od Ciebie.',
+      angle: 'Kamera z boku (prostopadle do ciała), nisko nad podłogą.',
+      bodyParts: 'W kadrze: barki, łokcie, biodra i kostki.',
+      tips: [
+        'Czas liczy się tylko wtedy, gdy ciało tworzy prostą linię (bez opadających lub uniesionych bioder).',
+        'Kalibracja: przyjmij pozycję deski i wytrzymaj ok. 1–2 s.',
+      ],
+    },
+    postureHint: 'Przyjmij deskę: przedramiona pod barkami, ciało w jednej linii.',
   },
 };

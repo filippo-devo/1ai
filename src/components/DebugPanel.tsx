@@ -32,13 +32,15 @@ interface Props {
   cropSize: number;
   events: RepEvent[];
   engine?: string;
+  /** Distance from the top of the camera area (below the top bar). */
+  top?: number;
 }
 
-export function DebugPanel({ exercise, features, snapshot, fps, inferenceMs, cropSize, events, engine }: Props) {
+export function DebugPanel({ exercise, features, snapshot, fps, inferenceMs, cropSize, events, engine, top = 4 }: Props) {
   const info = EXERCISES[exercise];
   const th = snapshot?.thresholds;
   return (
-    <View style={styles.panel} pointerEvents="none">
+    <View style={[styles.panel, { top }]} pointerEvents="none">
       <Text style={styles.line}>
         faza: <Text style={styles.strong}>{snapshot?.phase ?? '–'}</Text> | śledzenie: {snapshot?.tracking ?? '–'} | postawa:{' '}
         {features?.postureOk ? 'OK' : 'NIE'}

@@ -9,7 +9,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import type { ExerciseId } from '../src/counting/config';
+import type { RepExerciseId as ExerciseId } from '../src/counting/config';
 import { computeCropRegion } from '../src/pose/crop';
 import { squareToUpright } from '../src/pose/movenet';
 import type { Pose } from '../src/pose/types';

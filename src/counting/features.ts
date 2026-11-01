@@ -27,6 +27,8 @@ export const REQUIRED_PARTS: Record<ExerciseId, BodyPart[]> = {
   pushup: ['shoulder', 'elbow', 'wrist', 'hip'],
   squat: ['shoulder', 'hip', 'knee', 'ankle'],
   pullup: ['shoulder', 'elbow', 'wrist'],
+  situp: ['shoulder', 'hip', 'knee', 'ankle'],
+  plank: ['shoulder', 'elbow', 'hip', 'ankle'],
 };
 
 /**
@@ -38,6 +40,8 @@ const SIDE_STRATEGY: Record<ExerciseId, 'best' | 'average'> = {
   pushup: 'best',
   squat: 'average',
   pullup: 'average',
+  situp: 'best',
+  plank: 'best',
 };
 
 export type Side = 'left' | 'right' | 'both';
@@ -178,10 +182,41 @@ function computeSide(exercise: ExerciseId, g: SideGeometry): PerSide {
         debug: { elbowDeg: elbow },
       };
     }
+    case 'situp': {
+      const hip = angleDeg(g.shoulder, g.hip, g.knee);
+      const knee = angleDeg(g.hip, g.knee, g.ankle);
+      const torso = dist(g.shoulder, g.hip);
+      const legs = dist(g.hip, g.knee) + dist(g.knee, g.ankle);
+      // On the floor: hips and feet at about the same height, knees bent.
+      const postureOk = Math.abs(g.ankle.y - g.hip.y) < 0.35 * legs && knee < 150;
+      return {
+        primary: hip,
+        // Shoulders above the hips (image y grows downward): grows while sitting up.
+        auxRaw: g.shoulder.y - g.hip.y,
+        scale: torso,
+        postureOk,
+        debug: { hipDeg: hip, kneeDeg: knee },
+      };
+    }
+    case 'plank': {
+      const body = angleDeg(g.shoulder, g.hip, g.ankle);
+      const bodyLen = dist(g.shoulder, g.hip) + dist(g.hip, g.ankle);
+      const incl = inclinationFromHorizontalDeg(g.shoulder, g.ankle);
+      // Shoulders raised above the feet (not lying flat) and supported by the arms.
+      const elevation = (g.ankle.y - g.shoulder.y) / bodyLen;
+      const postureOk = incl <= 40 && elevation >= 0.06 && g.elbow.y > g.shoulder.y;
+      return {
+        primary: body,
+        auxRaw: 0,
+        scale: bodyLen,
+        postureOk,
+        debug: { bodyDeg: body, inclDeg: incl, elevation },
+      };
+    }
   }
 }
 
-const AUX_DIRECTION: Record<ExerciseId, 1 | -1> = { pushup: -1, squat: 1, pullup: -1 };
+const AUX_DIRECTION: Record<ExerciseId, 1 | -1> = { pushup: -1, squat: 1, pullup: -1, situp: -1, plank: 1 };
 
 export function extractFeatures(
   exercise: ExerciseId,

@@ -1,49 +1,111 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
-import { EXERCISE_IDS, EXERCISES } from '../counting/config';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { EXERCISE_IDS, EXERCISES, type ExerciseId } from '../counting/config';
+import { colors, exerciseTint, radius, withAlpha } from '../ui/theme';
+
+type IconName = keyof typeof MaterialCommunityIcons.glyphMap;
 
 export default function ExerciseSelectScreen() {
   const [voice, setVoice] = useState(true);
   const [debug, setDebug] = useState(false);
 
+  const open = (id: ExerciseId) =>
+    router.push({ pathname: '/workout', params: { exercise: id, voice: voice ? '1' : '0', debug: debug ? '1' : '0' } });
+
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Wybierz ćwiczenie</Text>
-      {EXERCISE_IDS.map((id) => (
-        <Pressable
-          key={id}
-          accessibilityRole="button"
-          style={({ pressed }) => [styles.button, pressed && styles.pressed]}
-          onPress={() =>
-            router.push({ pathname: '/workout', params: { exercise: id, voice: voice ? '1' : '0', debug: debug ? '1' : '0' } })
-          }
-        >
-          <Text style={styles.buttonText}>{EXERCISES[id].name}</Text>
-        </Pressable>
-      ))}
-      <View style={styles.row}>
-        <Text style={styles.label}>Odczytuj powtórzenia głosowo</Text>
-        <Switch value={voice} onValueChange={setVoice} />
+    <SafeAreaView style={styles.root} edges={['top', 'bottom', 'left', 'right']}>
+      <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
+        {EXERCISE_IDS.map((id) => {
+          const ex = EXERCISES[id];
+          const tint = exerciseTint[id];
+          return (
+            <Pressable
+              key={id}
+              accessibilityRole="button"
+              accessibilityLabel={ex.name}
+              onPress={() => open(id)}
+              style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+            >
+              <View style={[styles.iconChip, { backgroundColor: withAlpha(tint, 0.16) }]}>
+                <MaterialCommunityIcons name={ex.icon as IconName} size={30} color={tint} />
+              </View>
+              <View style={styles.cardText}>
+                <Text style={styles.cardTitle}>{ex.name}</Text>
+                <Text style={styles.cardSubtitle}>{ex.subtitle}</Text>
+              </View>
+              <MaterialCommunityIcons name="chevron-right" size={28} color={colors.muted} />
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
+      <View style={styles.settings}>
+        <SettingRow icon="volume-high" label="Odczyt głosowy" value={voice} onChange={setVoice} />
+        <View style={styles.divider} />
+        <SettingRow icon="bug-outline" label="Tryb debugowania" value={debug} onChange={setDebug} />
       </View>
-      <View style={styles.row}>
-        <Text style={styles.label}>Tryb debugowania (szkielet, kąty, faza)</Text>
-        <Switch value={debug} onValueChange={setDebug} />
-      </View>
-      <Text style={styles.note}>
-        Obraz z kamery jest analizowany wyłącznie na telefonie. Nic nie jest nagrywane, zapisywane ani wysyłane.
-      </Text>
-    </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function SettingRow({
+  icon,
+  label,
+  value,
+  onChange,
+}: {
+  icon: IconName;
+  label: string;
+  value: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <View style={styles.settingRow}>
+      <MaterialCommunityIcons name={icon} size={22} color={colors.muted} />
+      <Text style={styles.settingLabel}>{label}</Text>
+      <Switch
+        value={value}
+        onValueChange={onChange}
+        trackColor={{ false: colors.surface2, true: colors.accent }}
+        thumbColor={value ? colors.onAccent : colors.muted}
+        ios_backgroundColor={colors.surface2}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, gap: 14 },
-  title: { fontSize: 24, fontWeight: '600', marginBottom: 6 },
-  button: { backgroundColor: '#2563eb', paddingVertical: 22, borderRadius: 12, alignItems: 'center' },
-  pressed: { opacity: 0.7 },
-  buttonText: { color: 'white', fontSize: 22, fontWeight: '600' },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 },
-  label: { fontSize: 16, flex: 1, marginRight: 10 },
-  note: { fontSize: 13, color: '#555', marginTop: 8 },
+  root: { flex: 1, backgroundColor: colors.bg },
+  list: { padding: 16, paddingTop: 20, gap: 12 },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+  },
+  cardPressed: { transform: [{ scale: 0.98 }], backgroundColor: colors.surface2 },
+  iconChip: { width: 58, height: 58, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  cardText: { flex: 1 },
+  cardTitle: { color: colors.text, fontSize: 22, fontWeight: '700' },
+  cardSubtitle: { color: colors.muted, fontSize: 14, marginTop: 2 },
+  settings: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 16,
+  },
+  settingRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+  settingLabel: { flex: 1, color: colors.text, fontSize: 16, fontWeight: '500' },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
 });

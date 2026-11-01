@@ -70,6 +70,19 @@ npx eas-cli@latest build --profile development --platform android
 ```
 Zainstaluj otrzymany APK na telefonie, potem `npm start` i zeskanuj kod QR w aplikacji.
 
+### Projekt na expo.dev, buildy i aktualizacje przez GitHub Actions
+Projekt EAS: https://expo.dev/accounts/filiocha/projects/repcounter (sekret repozytorium `EXPO_TOKEN`).
+
+- **Aplikacja nie działa w Expo Go** — używa natywnych modułów (VisionCamera, TFLite), których Expo Go nie zawiera.
+  Instaluje się ją jako własny build z EAS (APK).
+- **Actions → „EAS build (Android)” → Run workflow**:
+  - `preview` – samodzielna aplikacja z wbudowanym kodem JS (nie wymaga komputera), odbiera aktualizacje z kanału `preview`;
+  - `development` – development client (kod JS z `npm start` na komputerze).
+- **Każdy push na `main`** uruchamia „EAS Update”: typecheck + testy, potem publikacja aktualizacji na kanał `preview`.
+  Zainstalowana aplikacja `preview` pobiera ją przy uruchomieniu (zmiana widoczna po ponownym otwarciu aplikacji).
+- `runtimeVersion` = odcisk natywnej części projektu (`fingerprint`): aktualizacja trafia tylko do zgodnych buildów.
+  Po dodaniu/zmianie natywnej biblioteki trzeba zrobić nowy build.
+
 ### Wydajność
 Build debug jest wolniejszy. Do oceny płynności liczenia użyj wersji release:
 

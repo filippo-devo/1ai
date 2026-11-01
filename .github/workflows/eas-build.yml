@@ -1,8 +1,21 @@
-name: EAS development build (Android)
+name: EAS build (Android)
 
 # Run manually from the "Actions" tab. Requires the repository secret EXPO_TOKEN.
+#   preview     – standalone app with the JS bundle inside (no computer needed), receives EAS Updates
+#                 published to the "preview" channel by eas-update.yml
+#   development – development client (needs `npm start` on a computer, or an EAS Update)
 on:
   workflow_dispatch:
+    inputs:
+      profile:
+        description: Build profile
+        type: choice
+        options: [preview, development]
+        default: preview
+      wait:
+        description: Wait for the build to finish (shows success/failure here)
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -18,4 +31,8 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
       - run: npm ci
-      - run: eas build --profile development --platform android --non-interactive --no-wait
+      - name: eas build
+        env:
+          PROFILE: ${{ inputs.profile }}
+          WAIT: ${{ inputs.wait && '--wait' || '--no-wait' }}
+        run: eas build --profile "$PROFILE" --platform android --non-interactive $WAIT

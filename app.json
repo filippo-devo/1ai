@@ -4,6 +4,10 @@
     "slug": "repcounter",
     "scheme": "repcounter",
     "version": "0.1.0",
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "orientation": "default",
     "icon": "./assets/icon.png",
     "ios": {

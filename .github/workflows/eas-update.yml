@@ -1,9 +1,12 @@
-name: EAS Update (preview channel)
+name: EAS Update (preview + Expo Go)
 
-# Every push to main publishes the JS bundle as an over-the-air update to the
-# "preview" channel. Installed preview builds download it on the next app start.
-# Updates only reach builds with the same runtime (native fingerprint); after
-# changing native dependencies, run the "EAS build" workflow again.
+# Every push to main publishes the JS bundle as over-the-air updates:
+#  - channel "preview": installed preview builds download it on the next app start
+#    (only builds with the same native fingerprint; after changing native
+#    dependencies run the "EAS build" workflow again);
+#  - channel "expo-go": runtime "exposdk:<SDK>" so it opens in Expo Go
+#    (Expo Go -> Projects -> repcounter -> expo-go). In Expo Go the app uses the
+#    WebView + MediaPipe pose engine, because Expo Go lacks the native modules.
 on:
   push:
     branches: [main]
@@ -33,3 +36,8 @@ jobs:
         env:
           MESSAGE: ${{ github.event.head_commit.message || 'manual update' }}
         run: eas update --channel preview --environment preview --message "$MESSAGE" --non-interactive
+      - name: eas update (Expo Go)
+        env:
+          MESSAGE: ${{ github.event.head_commit.message || 'manual update' }}
+          EXPO_GO_UPDATE: '1'
+        run: eas update --channel expo-go --environment preview --message "$MESSAGE" --non-interactive

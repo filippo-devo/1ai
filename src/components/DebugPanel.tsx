@@ -31,9 +31,10 @@ interface Props {
   inferenceMs: number;
   cropSize: number;
   events: RepEvent[];
+  engine?: string;
 }
 
-export function DebugPanel({ exercise, features, snapshot, fps, inferenceMs, cropSize, events }: Props) {
+export function DebugPanel({ exercise, features, snapshot, fps, inferenceMs, cropSize, events, engine }: Props) {
   const info = EXERCISES[exercise];
   const th = snapshot?.thresholds;
   return (
@@ -64,7 +65,8 @@ export function DebugPanel({ exercise, features, snapshot, fps, inferenceMs, cro
           </Text>
         ))}
       <Text style={styles.line}>
-        {fmt(fps, 1)} fps | inferencja+crop {fmt(inferenceMs)} ms | crop {fmt(cropSize * 100)}%
+        {engine ? `${engine} | ` : ''}
+        {fmt(fps, 1)} fps | inferencja {fmt(inferenceMs)} ms{Number.isFinite(cropSize) ? ` | crop ${fmt(cropSize * 100)}%` : ''}
       </Text>
       <Text style={styles.line}>
         powt.: {snapshot?.reps ?? 0} | niepełne: {snapshot?.partials ?? 0}

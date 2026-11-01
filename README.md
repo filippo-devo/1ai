@@ -21,8 +21,8 @@ Priorytetem prototypu jest poprawne liczenie, nie wygląd.
 | Model | **MoveNet SinglePose Lightning, int8, v4** (Google, Apache-2.0) | 17 punktów ciała |
 | `expo-speech`, `expo-keep-awake` | SDK 58 | odczyt liczby powtórzeń, ekran nie gaśnie |
 
-**Wymagany development build — Expo Go nie zadziała.** VisionCamera, Nitro Modules,
-resizer i TFLite zawierają kod natywny, którego Expo Go nie ma. Projekt ma zainstalowany
+Silnik natywny (VisionCamera, Nitro Modules, resizer, TFLite) wymaga buildu EAS — Expo Go go nie zawiera;
+w Expo Go aplikacja automatycznie używa silnika WebView + MediaPipe (sekcja 1a). Projekt ma zainstalowany
 `expo-dev-client` i profil `development` w `eas.json`.
 
 Dlaczego tak:
@@ -38,6 +38,23 @@ w którym powstał prototyp). **Uruchom raz `bash scripts/verify-model.sh`** —
 plik i porówna SHA-256.
 
 ---
+
+## 1a. Dwa silniki wykrywania pozy (wybierane automatycznie)
+
+| Gdzie działa aplikacja | Silnik | Szczegóły |
+|---|---|---|
+| **Expo Go** (iPhone/Android, bez własnego buildu) | MediaPipe Pose Landmarker w WebView | kamera przez `getUserMedia`, model `pose_landmarker_full` (Google), WebAssembly/WebGL na telefonie; biblioteka `@mediapipe/tasks-vision@1.1.1` i model pobierane przy pierwszym uruchomieniu (~10 MB), obraz nie opuszcza telefonu |
+| **Build EAS** (development / preview) | MoveNet Lightning (TFLite) przez VisionCamera | natywnie, szybciej, bez pobierania modelu |
+
+Wybór robi `src/camera/PoseCamera.tsx`: jeśli w aplikacji jest natywny moduł Nitro → silnik natywny,
+w przeciwnym razie (Expo Go) → WebView. Moduły natywne są ładowane tylko wtedy, gdy istnieją,
+dlatego Expo Go nie zgłasza już błędu „NitroModules could not be found”.
+Logika liczenia (maszyna stanów, progi, kalibracja) jest wspólna dla obu silników.
+
+### Expo Go (najprostszy sposób, także na iPhonie)
+Każdy push na `main` publikuje aktualizację na kanał **`expo-go`** (z `runtimeVersion` `exposdk:58.0.0`).
+W Expo Go zaloguj się na konto `filiocha` → **Projects → repcounter → expo-go** → otwórz najnowszą aktualizację.
+Przy pierwszym uruchomieniu zezwól Expo Go na dostęp do kamery.
 
 ## 2. Uruchomienie na fizycznym telefonie
 
@@ -73,8 +90,7 @@ Zainstaluj otrzymany APK na telefonie, potem `npm start` i zeskanuj kod QR w apl
 ### Projekt na expo.dev, buildy i aktualizacje przez GitHub Actions
 Projekt EAS: https://expo.dev/accounts/filiocha/projects/repcounter (sekret repozytorium `EXPO_TOKEN`).
 
-- **Aplikacja nie działa w Expo Go** — używa natywnych modułów (VisionCamera, TFLite), których Expo Go nie zawiera.
-  Instaluje się ją jako własny build z EAS (APK).
+- W Expo Go aplikacja działa z silnikiem WebView + MediaPipe (kanał `expo-go`, sekcja 1a); build EAS używa silnika natywnego.
 - **Actions → „EAS build (Android)” → Run workflow**:
   - `preview` – samodzielna aplikacja z wbudowanym kodem JS (nie wymaga komputera), odbiera aktualizacje z kanału `preview`;
   - `development` – development client (kod JS z `npm start` na komputerze).
@@ -227,6 +243,11 @@ Nagrania i dane pochodne trafiają do `fixtures/` (ignorowane przez git).
 
 Dodatkowo na prawdziwych danych pompek zasymulowano zasłonięcie osoby w trakcie 3. powtórzenia:
 licznik pokazuje 3 (przepada tylko przerwane powtórzenie, powrót sylwetki niczego nie dolicza).
+
+Silnik Expo Go (MediaPipe Pose Landmarker, `scripts/verify/extract_mediapipe.py`, ten sam model co w WebView),
+przez `mediapipeToCoco()` i ten sam licznik: **pompki 4/4, przysiady 4/4** — modele full i lite, 30 i ~10 kl./s.
+Strona WebView została dodatkowo uruchomiona w headless Chromium z wirtualną kamerą odtwarzającą nagranie pompek:
+kamera, model i nakładka szkieletu działają.
 
 Własne nagranie podciągnięć: zapisz jako `fixtures/videos/pullups.mp4` (4 pełne powtórzenia) i uruchom skrypt ponownie.
 

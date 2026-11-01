@@ -1,4 +1,6 @@
 import { computeCropRegion, cropOutputToSquare, FULL_CROP, sampleCrop } from '../src/pose/crop';
+import { MEDIAPIPE_LANDMARKS, mediapipeToCoco } from '../src/pose/mediapipe';
+import { webMessageToPose } from '../src/pose/web/messages';
 import { decodeMoveNet, squareToUpright, uprightSize, uprightToRawFrame } from '../src/pose/movenet';
 
 const kpArray = (fill: (i: number) => [number, number, number]) => {
@@ -128,5 +130,33 @@ describe('smart crop', () => {
     expect(Array.from(out.slice(0, 3))).toEqual([0, 0, 0]);
     // col 3 -> x = floor((-0.5 + 3.5/4) * 8) = 3, row 0 -> y = floor(0.5/4 * 8) = 1
     expect(Array.from(out.slice(3 * 3, 3 * 3 + 3))).toEqual([30, 10, 7]);
+  });
+});
+
+describe('MediaPipe (Expo Go engine) -> COCO keypoints', () => {
+  test('maps the 17 COCO keypoints from the 33 MediaPipe landmarks', () => {
+    const lm: number[] = [];
+    for (let i = 0; i < MEDIAPIPE_LANDMARKS; i++) lm.push(i / 100, i / 50, 0.9);
+    const coco = mediapipeToCoco(lm);
+    expect(coco).toHaveLength(51);
+    // left_shoulder (COCO 5) <- MediaPipe 11, right_ankle (COCO 16) <- MediaPipe 28
+    expect(coco.slice(15, 18)).toEqual([0.11, 0.22, 0.9]);
+    expect(coco.slice(48, 51)).toEqual([0.28, 0.56, 0.9]);
+  });
+
+  test('visibility is clamped to 0..1 and NaN becomes 0', () => {
+    const lm = new Array(MEDIAPIPE_LANDMARKS * 3).fill(0.5);
+    lm[0 * 3 + 2] = 1.7;
+    lm[11 * 3 + 2] = Number.NaN;
+    const coco = mediapipeToCoco(lm);
+    expect(coco[2]).toBe(1);
+    expect(coco[5 * 3 + 2]).toBe(0);
+  });
+
+  test('a frame without a person becomes a pose with all scores 0', () => {
+    const p = webMessageToPose({ t: 10, w: 640, h: 480, lm: null });
+    expect(p.keypoints).toHaveLength(51);
+    expect(p.keypoints.every((v) => v === 0)).toBe(true);
+    expect(p).toMatchObject({ width: 640, height: 480, timestamp: 10 });
   });
 });

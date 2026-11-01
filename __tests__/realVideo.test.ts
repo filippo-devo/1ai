@@ -14,6 +14,7 @@ import { computeCropRegion } from '../src/pose/crop';
 import { squareToUpright } from '../src/pose/movenet';
 import type { Pose } from '../src/pose/types';
 import { runCounter } from '../src/testing/run';
+import { webMessageToPose } from '../src/pose/web/messages';
 
 interface Fixture {
   width: number;
@@ -90,5 +91,49 @@ describe('real video with simulated occlusion', () => {
     const r = runCounter('pushup', poses);
     expect(r.events.some((e) => e.type === 'reset_lost')).toBe(true);
     expect(r.reps).toBe(3);
+  });
+});
+
+/**
+ * Expo Go path: MediaPipe Pose Landmarker landmarks (same model as the WebView page),
+ * produced by scripts/verify/extract_mediapipe.py in the format the WebView posts.
+ */
+interface WebPoseMessage {
+  t: number;
+  w: number;
+  h: number;
+  lm: number[] | null;
+}
+
+function loadWebPoses(file: string): Pose[] | null {
+  const p = path.join(DIR, file);
+  if (!fs.existsSync(p)) return null;
+  const msgs = JSON.parse(fs.readFileSync(p, 'utf8')) as WebPoseMessage[];
+  return msgs.map((m) => webMessageToPose(m));
+}
+
+const MP_CASES: { file: string; exercise: ExerciseId; reps: number }[] = [
+  { file: 'mp_pushups_full.json', exercise: 'pushup', reps: 4 },
+  { file: 'mp_pushups_lite.json', exercise: 'pushup', reps: 4 },
+  { file: 'mp_pushups_full_every3.json', exercise: 'pushup', reps: 4 },
+  { file: 'mp_squats_full.json', exercise: 'squat', reps: 4 },
+  { file: 'mp_squats_lite.json', exercise: 'squat', reps: 4 },
+  { file: 'mp_squats_full_every3.json', exercise: 'squat', reps: 4 },
+];
+
+describe.each(MP_CASES)('Expo Go path (MediaPipe) $file', ({ file, exercise, reps }) => {
+  const poses = loadWebPoses(file);
+  const maybe = poses ? test : test.skip;
+  maybe(`counts ${reps} ${exercise} repetitions`, () => {
+    const r = runCounter(exercise, poses!);
+    if (process.env.REPLAY_DEBUG) {
+      // eslint-disable-next-line no-console
+      console.log(
+        r.snapshots
+          .map((s, i) => `${i}\t${s.phase}\t${s.angle.toFixed(0)}\t${s.disp.toFixed(2)}\t${s.confidence.toFixed(2)}\t${s.tracking}\t${s.reps}`)
+          .join('\n'),
+      );
+    }
+    expect(r.reps).toBe(reps);
   });
 });

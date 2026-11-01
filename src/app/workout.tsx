@@ -2,12 +2,12 @@ import { useKeepAwake } from 'expo-keep-awake';
 import { router, useIsFocused, useLocalSearchParams } from 'expo-router';
 import * as Speech from 'expo-speech';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Camera, useCameraDevice, useCameraPermission, type CameraRef } from 'react-native-vision-camera';
+import { AppState, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { PoseCamera, POSE_ENGINE } from '../camera/PoseCamera';
+import type { DetectedPose } from '../camera/types';
 import { DebugPanel } from '../components/DebugPanel';
-import { SkeletonOverlay } from '../components/SkeletonOverlay';
 import { Calibrator, type CalibrationState } from '../counting/calibration';
-import { EXERCISES, EXERCISE_IDS, TRACKING, type ExerciseId } from '../counting/config';
+import { EXERCISES, EXERCISE_IDS, type ExerciseId } from '../counting/config';
 import {
   BODY_PART_PL,
   extractFeatures,
@@ -16,8 +16,6 @@ import {
   type Features,
 } from '../counting/features';
 import { RepCounter, type Calibration, type CounterSnapshot, type Phase, type RepEvent } from '../counting/repCounter';
-import { gpuResizerSupported, usePoseDetection, type DetectedPose } from '../hooks/usePoseDetection';
-import type { Point } from '../pose/types';
 import { formatDuration } from '../utils/format';
 
 type Stage = 'setup' | 'countdown' | 'active' | 'paused';
@@ -50,15 +48,9 @@ export default function WorkoutScreen() {
   const [debug, setDebug] = useState(params.debug === '1');
 
   // --- camera / permissions / lifecycle -------------------------------------------------
-  const permission = useCameraPermission();
   const [position, setPosition] = useState<'back' | 'front'>('back');
-  const device = useCameraDevice(position);
   const isFocused = useIsFocused();
   const appActive = useAppStateActive();
-  const cameraRef = useRef<CameraRef>(null);
-  const [cameraError, setCameraError] = useState<string | null>(null);
-  const [detectorError, setDetectorError] = useState<string | null>(null);
-  const [resizerSupported] = useState(() => gpuResizerSupported());
 
   // --- workout state ---------------------------------------------------------------------
   const [stage, setStage] = useState<Stage>('setup');
@@ -75,7 +67,6 @@ export default function WorkoutScreen() {
   const [snapshot, setSnapshot] = useState<CounterSnapshot | null>(null);
   const [features, setFeatures] = useState<Features | null>(null);
   const [lastPose, setLastPose] = useState<DetectedPose | null>(null);
-  const [overlay, setOverlay] = useState<{ points: (Point | null)[]; scores: number[] } | null>(null);
   const [perf, setPerf] = useState({ fps: 0, inferenceMs: 0 });
   const [events, setEvents] = useState<RepEvent[]>([]);
   const [countdown, setCountdown] = useState(COUNTDOWN_S);
@@ -85,7 +76,7 @@ export default function WorkoutScreen() {
   const fpsRef = useRef({ lastT: 0, fps: 0 });
 
   // Processing stops when the screen is not focused / app in background (camera inactive).
-  const isActive = isFocused && appActive && permission.hasPermission && device != null;
+  const isActive = isFocused && appActive;
 
   // --- pose handling (JS thread) ---------------------------------------------------------
   const onPose = useCallback(
@@ -109,27 +100,10 @@ export default function WorkoutScreen() {
 
       if (debug) {
         setPerf({ fps: s.fps, inferenceMs: pose.inferenceMs });
-        const cam = cameraRef.current;
-        const points: (Point | null)[] = [];
-        for (let i = 0; i < 17; i++) {
-          try {
-            points.push(
-              cam
-                ? cam.convertCameraPointToViewPoint({ x: pose.cameraPoints[i * 2], y: pose.cameraPoints[i * 2 + 1] })
-                : null,
-            );
-          } catch {
-            points.push(null);
-          }
-        }
-        setOverlay({ points, scores: Array.from({ length: 17 }, (_, i) => pose.keypoints[i * 3 + 2]) });
       }
     },
     [exercise, calibrator, debug],
   );
-  const onDetectorError = useCallback((message: string) => setDetectorError(message), []);
-  const { frameOutput, status } = usePoseDetection(onPose, onDetectorError);
-  const outputs = useMemo(() => [frameOutput], [frameOutput]);
 
   // --- timer (active time only, pauses excluded) ------------------------------------------
   useEffect(() => {
@@ -223,7 +197,7 @@ export default function WorkoutScreen() {
     [],
   );
 
-  const switchCamera = () => {
+  const switchCamera = useCallback(() => {
     setPosition((p) => (p === 'back' ? 'front' : 'back'));
     if (stageRef.current === 'setup') {
       calibrator.reset();
@@ -231,7 +205,7 @@ export default function WorkoutScreen() {
     } else {
       counterRef.current?.resetPhase();
     }
-  };
+  }, [calibrator]);
 
   const recalibrate = () => {
     calibrator.reset();
@@ -240,77 +214,19 @@ export default function WorkoutScreen() {
 
   const highlight = useMemo(() => requiredKeypointIndices(exercise), [exercise]);
 
-  // --- early exits: permissions / device / errors -----------------------------------------
-  if (!permission.hasPermission) {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.msg}>Aplikacja potrzebuje dostępu do kamery, aby liczyć powtórzenia.</Text>
-        <Text style={styles.small}>Obraz jest analizowany tylko na telefonie — nic nie jest nagrywane ani wysyłane.</Text>
-        {permission.canRequestPermission ? (
-          <Pressable style={styles.primary} onPress={() => permission.requestPermission()}>
-            <Text style={styles.primaryText}>Zezwól na dostęp do kamery</Text>
-          </Pressable>
-        ) : (
-          <>
-            <Text style={styles.msg}>Dostęp do kamery został odmówiony. Włącz go w ustawieniach systemu.</Text>
-            <Pressable style={styles.primary} onPress={() => Linking.openSettings()}>
-              <Text style={styles.primaryText}>Otwórz ustawienia</Text>
-            </Pressable>
-          </>
-        )}
-        <Pressable style={styles.secondary} onPress={() => router.back()}>
-          <Text style={styles.secondaryText}>Wróć</Text>
-        </Pressable>
-      </View>
-    );
-  }
-  if (!resizerSupported) {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.msg}>
-          To urządzenie nie obsługuje przetwarzania obrazu na GPU wymaganego do wykrywania pozy (Vulkan na Androidzie).
-        </Text>
-      </View>
-    );
-  }
-  if (device == null) {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.msg}>Uruchamianie kamery…</Text>
-        <Text style={styles.small}>
-          Jeśli ten komunikat nie znika, telefon nie ma {position === 'back' ? 'tylnej' : 'przedniej'} kamery.
-        </Text>
-        <Pressable style={styles.primary} onPress={switchCamera}>
-          <Text style={styles.primaryText}>Przełącz kamerę</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  const fatal = cameraError ?? (status.state === 'error' ? status.message : null);
   const counting = stage === 'active' || stage === 'paused';
 
   return (
     <View style={styles.root}>
       <View style={styles.cameraBox}>
-        <Camera
-          ref={cameraRef}
-          style={StyleSheet.absoluteFill}
-          device={device}
-          isActive={isActive}
-          outputs={outputs}
-          resizeMode="contain"
-          orientationSource="interface"
-          onError={(e) => setCameraError(`Błąd kamery: ${e.message}`)}
+        <PoseCamera
+          position={position}
+          active={isActive}
+          debug={debug}
+          highlight={highlight}
+          onPose={onPose}
+          onSwitchCamera={switchCamera}
         />
-        {debug && overlay && (
-          <SkeletonOverlay
-            points={overlay.points}
-            scores={overlay.scores}
-            minScore={TRACKING.minKeypointScore}
-            highlight={highlight}
-          />
-        )}
         {debug && (
           <DebugPanel
             exercise={exercise}
@@ -318,7 +234,8 @@ export default function WorkoutScreen() {
             snapshot={snapshot}
             fps={perf.fps}
             inferenceMs={perf.inferenceMs}
-            cropSize={lastPose?.crop.size ?? Number.NaN}
+            cropSize={lastPose?.cropSize ?? Number.NaN}
+            engine={POSE_ENGINE === 'native' ? 'MoveNet (natywnie)' : 'MediaPipe (WebView, Expo Go)'}
             events={events}
           />
         )}
@@ -336,16 +253,6 @@ export default function WorkoutScreen() {
             paused={stage === 'paused'}
             elapsedMs={elapsedMs}
           />
-        )}
-        {status.state === 'loading' && (
-          <View style={styles.banner}>
-            <Text style={styles.bannerText}>Ładowanie modelu…</Text>
-          </View>
-        )}
-        {(fatal || detectorError) && (
-          <View style={[styles.banner, styles.bannerError]}>
-            <Text style={styles.bannerText}>{fatal ?? detectorError}</Text>
-          </View>
         )}
       </View>
 

@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "RepCounter",
+    "slug": "repcounter",
+    "scheme": "repcounter",
+    "version": "0.1.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.example.repcounter",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Kamera jest potrzebna do liczenia powtórzeń. Obraz jest analizowany tylko na telefonie i nie jest zapisywany ani wysyłany."
+      }
+    },
+    "android": {
+      "package": "com.example.repcounter",
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-router",
+      "react-native-fast-tflite",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          }
+        }
+      ]
+    ]
+  }
+}

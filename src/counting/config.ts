@@ -17,15 +17,15 @@
  */
 
 /** Exercises counted in repetitions (state machine in repCounter.ts). */
-export type RepExerciseId = 'pushup' | 'squat' | 'pullup' | 'situp';
-/** All exercises; 'plank' is timed (plankTimer.ts). */
-export type ExerciseId = RepExerciseId | 'plank';
+export type RepExerciseId = 'pushup' | 'squat' | 'pullup' | 'situp' | 'bench';
+/** All exercises; 'plank' is timed (plankTimer.ts), 'jumprope' counts jumps (jumpCounter.ts). */
+export type ExerciseId = RepExerciseId | 'jumprope' | 'plank';
 
-export const EXERCISE_IDS: ExerciseId[] = ['pushup', 'squat', 'pullup', 'situp', 'plank'];
-export const REP_EXERCISE_IDS: RepExerciseId[] = ['pushup', 'squat', 'pullup', 'situp'];
+export const EXERCISE_IDS: ExerciseId[] = ['pushup', 'squat', 'pullup', 'situp', 'bench', 'jumprope', 'plank'];
+export const REP_EXERCISE_IDS: RepExerciseId[] = ['pushup', 'squat', 'pullup', 'situp', 'bench'];
 
 export function isRepExercise(id: ExerciseId): id is RepExerciseId {
-  return id !== 'plank';
+  return (REP_EXERCISE_IDS as string[]).includes(id);
 }
 
 export interface ExerciseThresholds {
@@ -145,6 +145,59 @@ export const THRESHOLDS: Record<RepExerciseId, ExerciseThresholds> = {
     minStartEnterDeg: 105,
     calibMinAngleDeg: 110,
   },
+  /**
+   * Bench press, side view, lying on the bench. Primary angle: elbow (large =
+   * arms locked out). Aux: wrists (bar) descending toward the shoulders ÷ arm length.
+   */
+  bench: {
+    startEnterDeg: 150,
+    startExitDeg: 138,
+    targetEnterDeg: 95,
+    targetExitDeg: 107,
+    auxTargetEnter: 0.3,
+    auxTargetExit: 0.22,
+    minRepMs: 500,
+    dwellFrames: 2,
+    calibStartMarginDeg: 10,
+    minStartEnterDeg: 135,
+    calibMinAngleDeg: 140,
+  },
+};
+
+/**
+ * Jump rope: a jump = hips and feet rising above the ground level and landing
+ * again. Heights are normalized by leg length (hip–knee–ankle), so they do not
+ * depend on body size or camera distance.
+ */
+export interface JumpConfig {
+  /** Height above ground (÷ leg length) to count as airborne. */
+  airborneEnter: number;
+  /** Below this height the person has landed (hysteresis). */
+  airborneExit: number;
+  /** Shorter "flights" are keypoint noise (a single-frame spike), not jumps. */
+  minAirMs: number;
+  /** Minimum time between two counted jumps (faster = noise). */
+  minIntervalMs: number;
+  /** Longer "flights" are not jumps (e.g. stepping back) — reset without counting. */
+  maxAirMs: number;
+  /** Ground level = this percentile of the vertical position over the window. */
+  groundWindowMs: number;
+  groundPercentile: number;
+  /** EMA factor for the vertical position (1 = no smoothing: smoothing flattens short jumps). */
+  smoothing: number;
+  calibMinAngleDeg: number;
+}
+
+export const JUMP: JumpConfig = {
+  airborneEnter: 0.02,
+  airborneExit: 0.008,
+  minAirMs: 50,
+  minIntervalMs: 220,
+  maxAirMs: 900,
+  groundWindowMs: 1500,
+  groundPercentile: 0.6,
+  smoothing: 1,
+  calibMinAngleDeg: 150,
 };
 
 /**
@@ -174,6 +227,17 @@ export const PLANK: PlankConfig = {
   calibMinAngleDeg: 150,
   calibMarginDeg: 8,
   minBodyEnterDeg: 152,
+};
+
+/**
+ * The native engine (MoveNet Lightning) jitters much more than MediaPipe: measured on a
+ * real video while standing still, the hip/feet height std was 1.4–4% of leg length
+ * (MediaPipe: 0.4–0.8%). With MoveNet only clearly visible jumps (~5 cm+) are counted.
+ */
+export const JUMP_MOVENET: Partial<JumpConfig> = {
+  airborneEnter: 0.06,
+  airborneExit: 0.025,
+  minAirMs: 70,
 };
 
 export interface ExerciseInfo {
@@ -288,6 +352,51 @@ export const EXERCISES: Record<ExerciseId, ExerciseInfo> = {
       ],
     },
     postureHint: 'Połóż się na plecach bokiem do kamery, kolana zgięte, stopy na podłodze.',
+  },
+  bench: {
+    id: 'bench',
+    kind: 'reps',
+    subtitle: 'Sztanga na ławce · widok z boku',
+    icon: 'weight',
+    name: 'Wyciskanie',
+    startLabel: 'Ręce proste',
+    targetLabel: 'Sztanga przy klatce',
+    primaryLabel: 'Kąt łokcia',
+    auxLabel: 'Opuszczenie sztangi',
+    setup: {
+      phoneOrientation: 'Telefon poziomo (landscape), oparty stabilnie na wysokości ławki.',
+      distance: 'Ok. 1,5–2,5 m od ławki.',
+      angle: 'Kamera z boku (prostopadle do ławki), tak by talerze sztangi nie zasłaniały łokcia.',
+      bodyParts: 'W kadrze: barki, łokcie, nadgarstki i biodra.',
+      tips: [
+        'Zaliczany jest pełny ruch: sztanga opuszczona do klatki (łokcie zgięte), potem wyprostowane ręce.',
+        'Kalibracja: połóż się z wyprostowanymi rękami nad sobą i wytrzymaj ok. 1–2 s.',
+        'Ćwicz z asekuracją – aplikacja tylko liczy powtórzenia.',
+      ],
+    },
+    postureHint: 'Połóż się na ławce bokiem do kamery, ręce wyprostowane nad barkami.',
+  },
+  jumprope: {
+    id: 'jumprope',
+    kind: 'reps',
+    subtitle: 'Skoki · widok z przodu lub z boku',
+    icon: 'jump-rope',
+    name: 'Skakanka',
+    startLabel: 'Stanie',
+    targetLabel: 'Skok',
+    primaryLabel: 'Kąt kolana',
+    auxLabel: 'Wysokość skoku',
+    setup: {
+      phoneOrientation: 'Telefon pionowo (portrait), oparty stabilnie na wysokości ok. 0,5–1 m.',
+      distance: 'Ok. 2,5–3,5 m od Ciebie – cała sylwetka ze stopami i zapasem pod stopami.',
+      angle: 'Przodem lub bokiem do kamery, telefon nieruchomo (nie trzymaj go w ręce).',
+      bodyParts: 'W kadrze: barki, biodra, kolana i kostki.',
+      tips: [
+        'Każde odbicie i lądowanie to jeden skok. Najlepiej działa przy dobrym świetle i płynnym obrazie.',
+        'Kalibracja: stań prosto w miejscu skakania i wytrzymaj ok. 1–2 s.',
+      ],
+    },
+    postureHint: 'Stań prosto, cała sylwetka razem ze stopami w kadrze.',
   },
   plank: {
     id: 'plank',

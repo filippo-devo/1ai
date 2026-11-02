@@ -28,6 +28,8 @@ export const REQUIRED_PARTS: Record<ExerciseId, BodyPart[]> = {
   squat: ['shoulder', 'hip', 'knee', 'ankle'],
   pullup: ['shoulder', 'elbow', 'wrist'],
   situp: ['shoulder', 'hip', 'knee', 'ankle'],
+  bench: ['shoulder', 'elbow', 'wrist', 'hip'],
+  jumprope: ['shoulder', 'hip', 'knee', 'ankle'],
   plank: ['shoulder', 'elbow', 'hip', 'ankle'],
 };
 
@@ -41,6 +43,8 @@ const SIDE_STRATEGY: Record<ExerciseId, 'best' | 'average'> = {
   squat: 'average',
   pullup: 'average',
   situp: 'best',
+  bench: 'best',
+  jumprope: 'average',
   plank: 'best',
 };
 
@@ -198,6 +202,35 @@ function computeSide(exercise: ExerciseId, g: SideGeometry): PerSide {
         debug: { hipDeg: hip, kneeDeg: knee },
       };
     }
+    case 'bench': {
+      const elbow = angleDeg(g.shoulder, g.elbow, g.wrist);
+      const arm = dist(g.shoulder, g.elbow) + dist(g.elbow, g.wrist);
+      const torsoIncl = inclinationFromHorizontalDeg(g.shoulder, g.hip);
+      // Lying on the bench, hands (bar) above the shoulders.
+      const wristAboveShoulder = g.shoulder.y - g.wrist.y;
+      const postureOk = torsoIncl <= 35 && wristAboveShoulder > -0.1 * arm;
+      return {
+        primary: elbow,
+        auxRaw: wristAboveShoulder,
+        scale: arm,
+        postureOk,
+        debug: { elbowDeg: elbow, torsoInclDeg: torsoIncl },
+      };
+    }
+    case 'jumprope': {
+      const knee = angleDeg(g.hip, g.knee, g.ankle);
+      const legs = dist(g.hip, g.knee) + dist(g.knee, g.ankle);
+      const torsoIncl = inclinationFromHorizontalDeg(g.shoulder, g.hip);
+      const postureOk = torsoIncl >= 60 && g.shoulder.y < g.hip.y && g.hip.y < g.ankle.y;
+      return {
+        primary: knee,
+        // Vertical position of the body (image y grows downward): mean of hips and feet.
+        auxRaw: (g.hip.y + g.ankle.y) / 2,
+        scale: legs,
+        postureOk,
+        debug: { kneeDeg: knee, torsoInclDeg: torsoIncl },
+      };
+    }
     case 'plank': {
       const body = angleDeg(g.shoulder, g.hip, g.ankle);
       const bodyLen = dist(g.shoulder, g.hip) + dist(g.hip, g.ankle);
@@ -216,7 +249,15 @@ function computeSide(exercise: ExerciseId, g: SideGeometry): PerSide {
   }
 }
 
-const AUX_DIRECTION: Record<ExerciseId, 1 | -1> = { pushup: -1, squat: 1, pullup: -1, situp: -1, plank: 1 };
+const AUX_DIRECTION: Record<ExerciseId, 1 | -1> = {
+  pushup: -1,
+  squat: 1,
+  pullup: -1,
+  situp: -1,
+  bench: -1,
+  jumprope: -1,
+  plank: 1,
+};
 
 export function extractFeatures(
   exercise: ExerciseId,

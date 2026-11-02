@@ -255,6 +255,86 @@ export function plankSkeleton(bodyDeg: number, body: Body, origin: Point): Skele
   };
 }
 
+/**
+ * Bench press, side view, lying on a bench (head to the right). The bar/wrists
+ * are above the shoulders; `elbowDeg` is the elbow angle (180 = locked out).
+ */
+export function benchSkeleton(elbowDeg: number, body: Body, origin: Point): Skeleton {
+  const shoulder = { x: origin.x, y: origin.y };
+  const d = span(body.upperArm, body.forearm, elbowDeg);
+  // Bar path slightly toward the lower chest.
+  const wrist = { x: shoulder.x - 0.12 * d, y: shoulder.y - 0.99 * d };
+  const elbow = joint(shoulder, wrist, body.upperArm, body.forearm, 1);
+  const hip = { x: shoulder.x - body.torso, y: shoulder.y + 6 };
+  const knee = { x: hip.x - 0.9 * body.thigh, y: hip.y + 0.35 * body.thigh };
+  const ankle = { x: knee.x - 6, y: knee.y + body.shin };
+  const nose = { x: shoulder.x + 0.3 * body.torso, y: shoulder.y - 10 };
+  return {
+    nose,
+    leftEye: { x: nose.x + 2, y: nose.y - 5 },
+    leftEar: { x: nose.x - 8, y: nose.y - 4 },
+    leftShoulder: shoulder,
+    leftElbow: elbow,
+    leftWrist: wrist,
+    leftHip: hip,
+    leftKnee: knee,
+    leftAnkle: ankle,
+  };
+}
+
+/** Jump rope: a standing person (front view) lifted `heightPx` pixels off the ground. */
+export function jumpSkeleton(heightPx: number, body: Body, origin: Point): Skeleton {
+  return pullupLikeStanding(body, { x: origin.x, y: origin.y - heightPx });
+}
+
+function pullupLikeStanding(body: Body, ground: Point): Skeleton {
+  const half = 0.25 * body.torso;
+  const ankleY = ground.y;
+  const kneeY = ankleY - body.shin;
+  const hipY = kneeY - body.thigh;
+  const shoulderY = hipY - body.torso;
+  const sh = 0.38 * body.torso;
+  const sk: Skeleton = {
+    nose: { x: ground.x, y: shoulderY - 0.3 * body.torso },
+    leftShoulder: { x: ground.x - sh, y: shoulderY },
+    rightShoulder: { x: ground.x + sh, y: shoulderY },
+    // Hands at the hips holding the rope handles.
+    leftElbow: { x: ground.x - sh - 8, y: shoulderY + body.upperArm },
+    rightElbow: { x: ground.x + sh + 8, y: shoulderY + body.upperArm },
+    leftWrist: { x: ground.x - sh - 20, y: shoulderY + body.upperArm + body.forearm * 0.8 },
+    rightWrist: { x: ground.x + sh + 20, y: shoulderY + body.upperArm + body.forearm * 0.8 },
+    leftHip: { x: ground.x - half, y: hipY },
+    rightHip: { x: ground.x + half, y: hipY },
+    leftKnee: { x: ground.x - half, y: kneeY },
+    rightKnee: { x: ground.x + half, y: kneeY },
+    leftAnkle: { x: ground.x - half, y: ankleY },
+    rightAnkle: { x: ground.x + half, y: ankleY },
+  };
+  const nose = sk.nose!;
+  sk.leftEye = { x: nose.x - 6, y: nose.y - 5 };
+  sk.rightEye = { x: nose.x + 6, y: nose.y - 5 };
+  sk.leftEar = { x: nose.x - 14, y: nose.y };
+  sk.rightEar = { x: nose.x + 14, y: nose.y };
+  return sk;
+}
+
+/** Keyframes for `n` rope jumps of `heightPx` at `hz` jumps per second (after a standing lead-in). */
+export function jumpKeyframes(n: number, heightPx: number, hz: number, leadInMs = 1000, leadOutMs = 1000): [number, number][] {
+  const period = 1000 / hz;
+  const kf: [number, number][] = [
+    [0, 0],
+    [leadInMs, 0],
+  ];
+  let t = leadInMs;
+  for (let i = 0; i < n; i++) {
+    // ~45% of the period in the air (rope jumping), the rest on the ground.
+    kf.push([t + period * 0.225, heightPx], [t + period * 0.45, 0], [t + period, 0]);
+    t += period;
+  }
+  kf.push([t + leadOutMs, 0]);
+  return kf;
+}
+
 /** Rep profile: [time fraction, angle] keyframes are linearly interpolated. */
 export interface RepSpec {
   /** Angle at the start position (extended). */
@@ -351,13 +431,15 @@ const SKELETONS: Record<ExerciseId, (deg: number, body: Body, origin: Point) => 
   squat: squatSkeleton,
   pullup: pullupSkeleton,
   situp: situpSkeleton,
+  bench: benchSkeleton,
+  jumprope: jumpSkeleton,
   plank: plankSkeleton,
 };
 
 export function generateSequence(opts: SequenceOptions): Pose[] {
   const fps = opts.fps ?? 30;
   const body = opts.body ?? AVERAGE_BODY;
-  const isPortrait = opts.exercise === 'squat' || opts.exercise === 'pullup';
+  const isPortrait = opts.exercise === 'squat' || opts.exercise === 'pullup' || opts.exercise === 'jumprope';
   const W = opts.imageWidth ?? (isPortrait ? 480 : 640);
   const H = opts.imageHeight ?? (isPortrait ? 640 : 480);
   const rand = rng(opts.seed ?? 1);
@@ -372,6 +454,10 @@ export function generateSequence(opts: SequenceOptions): Pose[] {
       ? { x: W * 0.75, y: H * 0.8 }
       : opts.exercise === 'situp'
         ? { x: W * 0.45, y: H * 0.8 }
+        : opts.exercise === 'bench'
+          ? { x: W * 0.6, y: H * 0.6 }
+          : opts.exercise === 'jumprope'
+            ? { x: W * 0.5, y: H * 0.9 }
         : opts.exercise === 'squat'
         ? { x: W * 0.5, y: H * 0.88 }
         : { x: W * 0.5, y: H * 0.12 };

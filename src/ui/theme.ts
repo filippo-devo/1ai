@@ -21,6 +21,8 @@ export const exerciseTint: Record<ExerciseId, string> = {
   squat: '#5AC8FA',
   pullup: '#FF9F43',
   situp: '#B388FF',
+  bench: '#FFD166',
+  jumprope: '#4DD0E1',
   plank: '#FF6B9A',
 };
 

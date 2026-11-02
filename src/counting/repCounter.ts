@@ -41,7 +41,8 @@ export interface CounterSnapshot {
   confidence: number;
   side: Features['side'];
   missing: Features['missing'];
-  thresholds: EffectiveThresholds;
+  /** Angle thresholds (null for counters that do not use them, e.g. jump rope). */
+  thresholds: EffectiveThresholds | null;
   lastEvent: RepEvent | null;
 }
 

@@ -40,13 +40,19 @@ export default function SummaryScreen() {
 
         <View style={styles.hero}>
           <Text style={[styles.heroValue, { color: tint }]}>{isHold ? formatDuration(heldMs) : reps}</Text>
-          <Text style={styles.heroLabel}>{isHold ? 'CZAS W DESCE' : 'POWTÓRZENIA'}</Text>
+          <Text style={styles.heroLabel}>{isHold ? 'CZAS W DESCE' : exercise === 'jumprope' ? 'SKOKI' : 'POWTÓRZENIA'}</Text>
         </View>
 
         <View style={styles.stats}>
           <Stat icon="timer-outline" label="Czas treningu" value={formatDuration(durationMs)} />
           {isHold ? (
             <Stat icon="trophy-outline" label="Najdłużej bez przerwy" value={formatDuration(bestMs)} />
+          ) : exercise === 'jumprope' ? (
+            <Stat
+              icon="speedometer"
+              label="Skoków na minutę"
+              value={durationMs > 0 ? String(Math.round(reps / (durationMs / 60000))) : '0'}
+            />
           ) : (
             <Stat icon="alert-circle-outline" label="Niepełne powtórzenia" value={String(partials)} />
           )}

@@ -17,6 +17,7 @@ const FULL: Record<RepExerciseId, { topDeg: number; bottomDeg: number }> = {
   squat: { topDeg: 175, bottomDeg: 85 },
   pullup: { topDeg: 170, bottomDeg: 55 },
   situp: { topDeg: 133, bottomDeg: 50 },
+  bench: { topDeg: 172, bottomDeg: 75 },
 };
 /** Clearly incomplete repetitions (not deep / high enough). */
 const HALF: Record<RepExerciseId, { topDeg: number; bottomDeg: number }> = {
@@ -24,6 +25,7 @@ const HALF: Record<RepExerciseId, { topDeg: number; bottomDeg: number }> = {
   squat: { topDeg: 175, bottomDeg: 130 },
   pullup: { topDeg: 170, bottomDeg: 120 },
   situp: { topDeg: 133, bottomDeg: 100 },
+  bench: { topDeg: 172, bottomDeg: 120 },
 };
 
 const ALL: RepExerciseId[] = REP_EXERCISE_IDS;
@@ -122,7 +124,7 @@ describe.each(ALL)('%s', (exercise) => {
   });
 
   test.each([
-    ['fast', exercise === 'pullup' || exercise === 'situp' ? 1000 : 700, 30],
+    ['fast', exercise === 'pullup' || exercise === 'situp' || exercise === 'bench' ? 1000 : 700, 30],
     ['slow', 5000, 30],
     ['low fps', 1500, 10],
     ['high fps', 1200, 60],

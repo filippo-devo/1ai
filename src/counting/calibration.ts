@@ -1,4 +1,4 @@
-import { isRepExercise, PLANK, THRESHOLDS, TRACKING, type ExerciseId, type TrackingConfig } from './config';
+import { isRepExercise, JUMP, PLANK, THRESHOLDS, TRACKING, type ExerciseId, type TrackingConfig } from './config';
 import type { Features } from './features';
 import { median, stdDev } from './geometry';
 import type { Calibration } from './repCounter';
@@ -31,7 +31,11 @@ export class Calibrator {
   ) {
     this.calibMinAngleDeg =
       options.calibMinAngleDeg ??
-      (isRepExercise(exercise) ? THRESHOLDS[exercise].calibMinAngleDeg : PLANK.calibMinAngleDeg);
+      (isRepExercise(exercise)
+        ? THRESHOLDS[exercise].calibMinAngleDeg
+        : exercise === 'jumprope'
+          ? JUMP.calibMinAngleDeg
+          : PLANK.calibMinAngleDeg);
     this.tracking = { ...TRACKING, ...options.tracking };
   }
 

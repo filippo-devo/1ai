@@ -9,7 +9,7 @@ import { PoseCamera, POSE_ENGINE } from '../camera/PoseCamera';
 import type { DetectedPose } from '../camera/types';
 import { DebugPanel } from '../components/DebugPanel';
 import { Calibrator, type CalibrationState } from '../counting/calibration';
-import { EXERCISES, EXERCISE_IDS, isRepExercise, type ExerciseId } from '../counting/config';
+import { EXERCISES, EXERCISE_IDS, isRepExercise, JUMP_MOVENET, type ExerciseId } from '../counting/config';
 import {
   BODY_PART_PL,
   extractFeatures,
@@ -18,6 +18,7 @@ import {
   type BodyPart,
   type Features,
 } from '../counting/features';
+import { JumpCounter } from '../counting/jumpCounter';
 import { PlankTimer, type PlankSnapshot } from '../counting/plankTimer';
 import { RepCounter, type Calibration, type CounterSnapshot, type Phase, type RepEvent } from '../counting/repCounter';
 import { colors, exerciseTint, radius, withAlpha } from '../ui/theme';
@@ -82,7 +83,7 @@ export default function WorkoutScreen() {
   const [calibrator] = useState(() => new Calibrator(exercise));
   const [calibration, setCalibration] = useState<CalibrationState | null>(null);
   const calibrationResultRef = useRef<Calibration | null>(null);
-  const counterRef = useRef<RepCounter | null>(null);
+  const counterRef = useRef<RepCounter | JumpCounter | null>(null);
   const plankRef = useRef<PlankTimer | null>(null);
   const announcedRef = useRef(0);
   const [snapshot, setSnapshot] = useState<CounterSnapshot | null>(null);
@@ -160,11 +161,16 @@ export default function WorkoutScreen() {
         return;
       }
       clearInterval(id);
-      if (isRepExercise(exercise)) {
-        const counter = new RepCounter(exercise, { calibration: calibrationResultRef.current });
+      if (isRepExercise(exercise) || exercise === 'jumprope') {
+        const counter =
+          exercise === 'jumprope'
+            ? new JumpCounter({ config: POSE_ENGINE === 'native' ? JUMP_MOVENET : undefined })
+            : new RepCounter(exercise, { calibration: calibrationResultRef.current });
+        // Jump rope is fast: announce every 10th jump instead of every jump.
+        const announceEvery = exercise === 'jumprope' ? 10 : 1;
         counter.onEvent((e) => {
           setEvents((prev) => [...prev.slice(-19), e]);
-          if (e.type === 'rep') say(String(e.reps), voice);
+          if (e.type === 'rep' && e.reps % announceEvery === 0) say(String(e.reps), voice);
         });
         counterRef.current = counter;
         setSnapshot(counter.snapshot());
@@ -436,10 +442,13 @@ function CountingOverlay({
       message = 'Trzymaj!';
     } else message = plank?.postureOk ? 'Wyprostuj ciało w jednej linii' : info.postureHint;
   } else if (snapshot && snapshot.phase === 'unknown' && !snapshot.postureOk) message = info.postureHint;
-  else message = snapshot ? phaseText(snapshot.phase, exercise) : '';
+  else if (exercise === 'jumprope') {
+    message = snapshot && snapshot.phase !== 'unknown' ? 'Skacz!' : 'Stań prosto…';
+    if (snapshot?.phase !== 'unknown') tone = 'good';
+  } else message = snapshot ? phaseText(snapshot.phase, exercise) : '';
 
   const big = isHold ? formatDuration(plank?.heldMs ?? 0) : String(snapshot?.reps ?? 0);
-  const caption = isHold ? 'czas w desce' : 'powtórzenia';
+  const caption = isHold ? 'czas w desce' : exercise === 'jumprope' ? 'skoki' : 'powtórzenia';
 
   return (
     <View style={[styles.countingBox, { paddingBottom: bottomInset + 16 }]} pointerEvents="box-none">

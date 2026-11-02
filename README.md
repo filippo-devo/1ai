@@ -154,7 +154,13 @@ nagraniu pompek liczba zaliczonych powtórzeń wynosiła **0/4 bez cropa i 4/4 z
 **Deska** jest liczona w czasie, nie w powtórzeniach (`src/counting/plankTimer.ts`): czas rośnie tylko wtedy, gdy
 pozycja jest poprawna przez co najmniej 0,4 s (histereza kąta 160°/148°, kalibracja może obniżyć próg do 152°).
 Opadające biodra, wstanie, położenie się lub wyjście z kadru zatrzymują zegar; czas, gdy osoby nie widać, nigdy nie jest doliczany.
-Odczyt głosowy co 10 s. Testy: `__tests__/plank.test.ts`. Brzuszki i deska są sprawdzone tylko na danych syntetycznych.
+Odczyt głosowy co 10 s. Testy: `__tests__/plank.test.ts`.
+
+**Skakanka** (`src/counting/jumpCounter.ts`): poziom podłogi = 60. percentyl pozycji pionowej z ostatnich 1,5 s,
+skok = uniesienie ≥ 2% długości nogi i lądowanie ≤ 0,8% (histereza), lot 50–900 ms, min. 220 ms między skokami;
+odczyt głosowy co 10 skoków. Na prawdziwym nagraniu (stanie w miejscu) drgania MediaPipe to 0,4–0,8% długości nogi,
+MoveNet 1,4–4% — dlatego w buildzie natywnym (MoveNet) progi są wyższe (6% / 2,5%, skoki od ok. 5 cm).
+Bardzo niskie skoki (< ok. 3 cm) mogą zostać pominięte. Testy: `__tests__/jumprope.test.ts`. Brzuszki i deska są sprawdzone tylko na danych syntetycznych.
 
 | Ćwiczenie | Kąt główny (duży = start) | Sygnał pomocniczy (względem pozycji startowej, ÷ długość segmentu) | Kontrola postawy |
 |---|---|---|---|
@@ -162,6 +168,8 @@ Odczyt głosowy co 10 s. Testy: `__tests__/plank.test.ts`. Brzuszki i deska są 
 | Przysiady | kolano (biodro–kolano–kostka) | obniżenie bioder ÷ długość uda | tułów ≥ 25° od poziomu, barki nad biodrami nad kostkami |
 | Podciągnięcia | łokieć | uniesienie barków w kierunku dłoni ÷ długość ręki | dłonie nad barkami (zwis) |
 | Brzuszki | biodro (bark–biodro–kolano), ~135° leżenie → ≤80° siad | uniesienie barków nad biodra ÷ długość tułowia | biodra i stopy na podłodze, kolana zgięte |
+| Wyciskanie na ławce | łokieć | opuszczenie nadgarstków (sztangi) ku barkom ÷ długość ręki | tułów poziomo, dłonie nad barkami |
+| Skakanka (skoki) | – | wysokość bioder i stóp nad poziomem podłogi ÷ długość nogi | stanie prosto |
 | Deska (czas) | linia ciała (bark–biodro–kostka) ≥160° | – | ciało poziomo, barki uniesione nad podłogą, łokcie pod barkami |
 
 Strona ciała: pompki — strona z wyższą pewnością (druga ręka jest zasłonięta przy widoku z boku);

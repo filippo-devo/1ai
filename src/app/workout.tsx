@@ -3,8 +3,8 @@ import { useKeepAwake } from 'expo-keep-awake';
 import { router, useIsFocused, useLocalSearchParams } from 'expo-router';
 import * as Speech from 'expo-speech';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AppState, LayoutAnimation, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CalibrationCollector, type CalibrationState } from '../analysis/calibration';
 import { CYCLIC, EXERCISE_IDS, type ExerciseId, type VariantId } from '../analysis/config';
 import { DEFAULT_VARIANT, EXERCISES } from '../analysis/exercises';
@@ -318,8 +318,9 @@ export default function WorkoutScreen() {
         </View>
       </View>
 
+      {/* The sheet floats OVER the full-screen camera, so the camera never changes size. */}
       {(stage === 'setup' || stage === 'countdown') && (
-        <SafeAreaView edges={['bottom']} style={styles.sheet}>
+        <View style={[styles.sheet, { paddingBottom: insets.bottom }]}>
           {stage === 'setup' ? (
             <SetupPanel
               exercise={exercise}
@@ -337,7 +338,7 @@ export default function WorkoutScreen() {
               <Text style={styles.cancelText}>Anuluj</Text>
             </Pressable>
           )}
-        </SafeAreaView>
+        </View>
       )}
     </View>
   );
@@ -514,7 +515,7 @@ function SetupPanel({
   if (calibration) {
     switch (calibration.status) {
       case 'not_visible':
-        calibText = `Ustaw się w kadrze${calibration.missing.length ? ` · nie widać: ${calibration.missing.map((m) => PART_PL[m]).join(', ')}` : ''}`;
+        calibText = `Ustaw się w kadrze${calibration.missing.length ? ` (${calibration.missing.map((m) => PART_PL[m]).join(', ')})` : ''}`;
         calibIcon = 'account-search-outline';
         break;
       case 'wrong_posture':
@@ -522,11 +523,11 @@ function SetupPanel({
         calibIcon = 'human';
         break;
       case 'holding':
-        calibText = 'Kalibracja — przyjmij pozycję startową i nie ruszaj się…';
+        calibText = 'Przyjmij pozycję startową i nie ruszaj się…';
         calibIcon = 'progress-clock';
         break;
       case 'done':
-        calibText = cfg ? 'Gotowe! Opcjonalnie zrób 2–3 spokojne ruchy, by zmierzyć zakres.' : 'Gotowe! Możesz zaczynać.';
+        calibText = cfg ? 'Gotowe! Opcjonalnie 2–3 spokojne ruchy, by zmierzyć zakres.' : 'Gotowe! Możesz zaczynać.';
         calibIcon = 'check-circle';
         break;
     }
@@ -541,6 +542,25 @@ function SetupPanel({
     ...info.setup.tips.map((t) => ({ icon: 'lightbulb-on-outline' as IconName, text: t })),
   ];
 
+  // Collapsed: only calibration status (+ Start once calibrated) so the camera stays visible.
+  // Expanded (tap or swipe up on the handle): variant, target, setup instructions, body parts.
+  const [expanded, setExpanded] = useState(false);
+  const toggle = useCallback((next: boolean) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpanded(next);
+  }, []);
+  const pan = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dy) > 8 && Math.abs(g.dy) > Math.abs(g.dx),
+        onPanResponderRelease: (_e, g) => {
+          if (g.dy < -24) toggle(true);
+          else if (g.dy > 24) toggle(false);
+        },
+      }),
+    [toggle],
+  );
+
   const stepTarget = (dir: 1 | -1) => {
     if (!cfg || target === null) return;
     const opts = cfg.targetOptions;
@@ -551,76 +571,94 @@ function SetupPanel({
 
   return (
     <View style={styles.setup}>
-      <View style={styles.handle} />
+      {/* Swipe up/down (parent View) or tap (Pressable) to show/hide the instructions. */}
+      <View {...pan.panHandlers}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={expanded ? 'Zwiń instrukcję' : 'Pokaż instrukcję'}
+          accessibilityState={{ expanded }}
+          onPress={() => toggle(!expanded)}
+          hitSlop={{ top: 12, bottom: 4 }}
+          style={styles.grabArea}
+        >
+          <View style={styles.handle} />
+          <Text style={styles.moreText}>{expanded ? 'Zwiń' : 'Instrukcja i ustawienia'}</Text>
+        </Pressable>
+      </View>
 
-      {info.variants.length > 1 && (
-        <View style={styles.segment} accessibilityRole="radiogroup">
-          {info.variants.map((v) => {
-            const on = v.id === variant;
-            return (
-              <Pressable
-                key={v.id}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: on }}
-                onPress={() => onVariant(v.id)}
-                style={[styles.segmentItem, on && { backgroundColor: tint }]}
-              >
-                <Text style={[styles.segmentText, on && { color: colors.onAccent }]}>{v.label}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      )}
-
-      <ScrollView style={styles.stepsScroll} contentContainerStyle={styles.steps} showsVerticalScrollIndicator={false}>
-        {steps.map((s) => (
-          <View key={s.text} style={styles.stepRow}>
-            <View style={[styles.stepIcon, { backgroundColor: withAlpha(tint, 0.14) }]}>
-              <MaterialCommunityIcons name={s.icon} size={18} color={tint} />
+      {expanded && (
+        <ScrollView style={styles.expandedScroll} contentContainerStyle={styles.expanded} showsVerticalScrollIndicator={false}>
+          {info.variants.length > 1 && (
+            <View style={styles.segment} accessibilityRole="radiogroup">
+              {info.variants.map((v) => {
+                const on = v.id === variant;
+                return (
+                  <Pressable
+                    key={v.id}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: on }}
+                    onPress={() => onVariant(v.id)}
+                    style={[styles.segmentItem, on && { backgroundColor: tint }]}
+                  >
+                    <Text style={[styles.segmentText, on && { color: colors.onAccent }]}>{v.label}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
-            <Text style={styles.stepText}>{s.text}</Text>
+          )}
+
+          <View style={styles.steps}>
+            {steps.map((s) => (
+              <View key={s.text} style={styles.stepRow}>
+                <View style={[styles.stepIcon, { backgroundColor: withAlpha(tint, 0.14) }]}>
+                  <MaterialCommunityIcons name={s.icon} size={18} color={tint} />
+                </View>
+                <Text style={styles.stepText}>{s.text}</Text>
+              </View>
+            ))}
           </View>
-        ))}
-      </ScrollView>
 
-      {parts && (
-        <View style={styles.chips}>
-          {parts.map(({ part, visible }) => (
-            <View
-              key={part}
-              style={[
-                styles.chip,
-                { backgroundColor: withAlpha(visible ? colors.ok : colors.danger, 0.16), borderColor: visible ? colors.ok : colors.danger },
-              ]}
-            >
-              <MaterialCommunityIcons name={visible ? 'check' : 'close'} size={14} color={visible ? colors.ok : colors.danger} />
-              <Text style={[styles.chipText, { color: visible ? colors.ok : colors.danger }]}>{PART_PL[part]}</Text>
+          {parts && (
+            <View style={styles.chips}>
+              {parts.map(({ part, visible }) => (
+                <View
+                  key={part}
+                  style={[
+                    styles.chip,
+                    { backgroundColor: withAlpha(visible ? colors.ok : colors.danger, 0.16), borderColor: visible ? colors.ok : colors.danger },
+                  ]}
+                >
+                  <MaterialCommunityIcons name={visible ? 'check' : 'close'} size={14} color={visible ? colors.ok : colors.danger} />
+                  <Text style={[styles.chipText, { color: visible ? colors.ok : colors.danger }]}>{PART_PL[part]}</Text>
+                </View>
+              ))}
             </View>
-          ))}
-        </View>
-      )}
+          )}
 
-      {cfg && target !== null && info.targetLabel && (
-        <View style={styles.targetRow}>
-          <MaterialCommunityIcons name="target" size={20} color={tint} />
-          <Text style={styles.targetText}>Cel zakresu: {info.targetLabel(target, variant)}</Text>
-          <Pressable accessibilityRole="button" accessibilityLabel="Mniejszy zakres" onPress={() => stepTarget(-1)} style={styles.targetBtn}>
-            <MaterialCommunityIcons name="minus" size={18} color={colors.text} />
-          </Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="Większy zakres" onPress={() => stepTarget(1)} style={styles.targetBtn}>
-            <MaterialCommunityIcons name="plus" size={18} color={colors.text} />
-          </Pressable>
-        </View>
+          {cfg && target !== null && info.targetLabel && (
+            <View style={styles.targetRow}>
+              <MaterialCommunityIcons name="target" size={20} color={tint} />
+              <Text style={styles.targetText}>Cel zakresu: {info.targetLabel(target, variant)}</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="Mniejszy zakres" onPress={() => stepTarget(-1)} style={styles.targetBtn}>
+                <MaterialCommunityIcons name="minus" size={18} color={colors.text} />
+              </Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel="Większy zakres" onPress={() => stepTarget(1)} style={styles.targetBtn}>
+                <MaterialCommunityIcons name="plus" size={18} color={colors.text} />
+              </Pressable>
+            </View>
+          )}
+        </ScrollView>
       )}
 
       <View style={styles.calibCard}>
         <MaterialCommunityIcons name={calibIcon} size={22} color={done ? colors.ok : colors.muted} />
-        <View style={{ flex: 1, gap: 8 }}>
+        <View style={{ flex: 1, gap: 6 }}>
+          <Text style={styles.calibLabel}>KALIBRACJA</Text>
           <Text style={[styles.calibText, done && { color: colors.ok }]}>{calibText}</Text>
           <View style={styles.progressTrack}>
             <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%`, backgroundColor: done ? colors.ok : tint }]} />
           </View>
-          {range && (
+          {range && expanded && (
             <Text style={styles.rangeText}>
               Zmierzony zakres: {Math.round(range.rest)}° → {Math.round(range.extreme)}° ({range.cycles}{' '}
               {range.cycles === 1 ? 'ruch' : 'ruchy'}) · to pomiar, nie cel
@@ -634,21 +672,23 @@ function SetupPanel({
         )}
       </View>
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Start"
-        accessibilityState={{ disabled: !done }}
-        disabled={!done}
-        onPress={onStart}
-        style={({ pressed }) => [
-          styles.startButton,
-          !done && styles.startButtonDisabled,
-          pressed && { transform: [{ scale: 0.98 }], opacity: 0.9 },
-        ]}
-      >
-        <MaterialCommunityIcons name="play" size={30} color={done ? colors.onAccent : colors.muted} />
-        <Text style={[styles.startText, !done && { color: colors.muted }]}>{done ? 'START' : 'Najpierw kalibracja'}</Text>
-      </Pressable>
+      {(done || expanded) && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Start"
+          accessibilityState={{ disabled: !done }}
+          disabled={!done}
+          onPress={onStart}
+          style={({ pressed }) => [
+            styles.startButton,
+            !done && styles.startButtonDisabled,
+            pressed && { transform: [{ scale: 0.98 }], opacity: 0.9 },
+          ]}
+        >
+          <MaterialCommunityIcons name="play" size={30} color={done ? colors.onAccent : colors.muted} />
+          <Text style={[styles.startText, !done && { color: colors.muted }]}>{done ? 'START' : 'Najpierw kalibracja'}</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -657,7 +697,8 @@ const textShadow = { textShadowColor: 'rgba(0,0,0,0.6)', textShadowRadius: 12, t
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: 'black' },
-  cameraBox: { flex: 1 },
+  // Always full screen: identical size in setup, countdown and counting.
+  cameraBox: { ...StyleSheet.absoluteFill },
 
   topBar: {
     position: 'absolute',
@@ -683,16 +724,24 @@ const styles = StyleSheet.create({
   titleText: { color: colors.text, fontSize: 16, fontWeight: '700' },
 
   sheet: {
-    backgroundColor: colors.surface,
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: withAlpha(colors.surface, 0.94),
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
-    maxHeight: '68%',
+    maxHeight: '72%',
     borderTopWidth: 1,
     borderColor: colors.border,
   },
-  setup: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 12, gap: 14, flexShrink: 1 },
-  handle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border },
-  stepsScroll: { flexGrow: 0, flexShrink: 1 },
+  setup: { paddingHorizontal: 20, paddingBottom: 12, gap: 12, flexShrink: 1 },
+  grabArea: { paddingTop: 10, paddingBottom: 2, alignItems: 'center', gap: 2 },
+  handle: { width: 40, height: 5, borderRadius: 3, backgroundColor: colors.muted, opacity: 0.6 },
+  moreText: { color: colors.muted, fontSize: 12, fontWeight: '600' },
+  expandedScroll: { flexGrow: 0, flexShrink: 1 },
+  expanded: { gap: 14, paddingBottom: 2 },
+  calibLabel: { color: colors.muted, fontSize: 12, fontWeight: '800', letterSpacing: 1.5 },
   steps: { gap: 10 },
   stepRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   stepIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
@@ -735,7 +784,7 @@ const styles = StyleSheet.create({
   },
   startButtonDisabled: { backgroundColor: colors.surface2, shadowOpacity: 0, elevation: 0 },
   startText: { color: colors.onAccent, fontSize: 22, fontWeight: '800', letterSpacing: 2 },
-  cancelButton: { margin: 20, height: 56, borderRadius: radius.lg, backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center' },
+  cancelButton: { marginHorizontal: 20, marginVertical: 16, height: 56, borderRadius: radius.lg, backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center' },
   cancelText: { color: colors.text, fontSize: 18, fontWeight: '700' },
 
   countdownBox: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', gap: 20 },

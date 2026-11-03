@@ -43,7 +43,7 @@ plik i porówna SHA-256.
 
 | Gdzie działa aplikacja | Silnik | Szczegóły |
 |---|---|---|
-| **Expo Go** (iPhone/Android, bez własnego buildu) | MediaPipe Pose Landmarker w WebView | kamera przez `getUserMedia`, model `pose_landmarker_full` (Google), WebAssembly/WebGL na telefonie; biblioteka `@mediapipe/tasks-vision@1.1.1` i model pobierane przy pierwszym uruchomieniu (~10 MB), obraz nie opuszcza telefonu |
+| **Expo Go** (iPhone/Android, bez własnego buildu) | MediaPipe Pose Landmarker w WebView | kamera przez `getUserMedia`, model `pose_landmarker_full` (Google), WebAssembly/WebGL na telefonie; biblioteka `@mediapipe/tasks-vision@1.1.1` (~13,5 MB WebAssembly) i model (~9,4 MB) pobierane w tle już na ekranie wyboru ćwiczeń, potem z pamięci podręcznej WebView; kamera i model ładują się równolegle, obraz pokazuje się dopiero po przeanalizowaniu pierwszej klatki (do tego czasu czarny ekran ze wskaźnikiem); obraz nie opuszcza telefonu |
 | **Build EAS** (development / preview) | MoveNet Lightning (TFLite) przez VisionCamera | natywnie, szybciej, bez pobierania modelu |
 
 Wybór robi `src/camera/PoseCamera.tsx`: jeśli w aplikacji jest natywny moduł Nitro → silnik natywny,
@@ -119,8 +119,12 @@ W trybie debugowania aplikacji (przełącznik „Debug”) widać fps i czas „
 1. **Wybór ćwiczenia**: przysiad, deska (na przedramionach), pompka, wyciskanie (płaska ławka),
    podciąganie (ścisłe), brzuszki (crunch / sit-up), skakanka (podskoki obunóż).
    Aplikacja **nie rozpoznaje sama, jakie to ćwiczenie** – wybiera je użytkownik.
-2. **Ustawienie**: wariant (pompka klasyczna / na kolanach, crunch / sit-up), **cel zakresu**
-   (np. kolano ≤ 100°, z przyciskami −/+), instrukcja ustawienia telefonu, lista widocznych punktów ciała.
+2. **Ustawienie**: kamera zajmuje cały ekran (ten sam rozmiar w ustawieniu, odliczaniu i treningu),
+   a panel na dole jest nałożony na obraz. Zwinięty panel pokazuje tylko status kalibracji
+   (np. „Ustaw się w kadrze (barki, biodra, kolana)”) i – po kalibracji – przycisk Start.
+   Przeciągnięcie uchwytu w górę (lub dotknięcie „Instrukcja i ustawienia”) rozwija: wariant
+   (pompka klasyczna / na kolanach, crunch / sit-up), **cel zakresu** (np. kolano ≤ 100°, −/+),
+   instrukcję ustawienia telefonu i listę widocznych punktów ciała.
 3. **Kalibracja**: krótkie przytrzymanie pozycji startowej (~1,2 s) mierzy osobniczy wyprost,
    szum pomiaru i dostępność punktów. Opcjonalnie 2–3 spokojne ruchy mierzą **zakres** – zapisywany
    osobno i **nigdy** nieprzyjmowany automatycznie jako cel.

@@ -5,6 +5,7 @@ import { SkeletonOverlay } from '../components/SkeletonOverlay';
 import { VISIBILITY } from '../analysis/config';
 import { gpuResizerSupported, usePoseDetection, type DetectedPose as NativePose } from '../hooks/usePoseDetection';
 import type { Point } from '../pose/types';
+import { LoadingCover } from './LoadingCover';
 import { cameraStyles as styles } from './styles';
 import type { PoseCameraProps } from './types';
 
@@ -16,10 +17,16 @@ export function NativePoseCamera({ position, active, debug, highlight, onPose, o
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [detectorError, setDetectorError] = useState<string | null>(null);
   const [resizerSupported] = useState(() => gpuResizerSupported());
+  const [previewStarted, setPreviewStarted] = useState(false);
+  const previewSeen = useRef(false);
   const [overlay, setOverlay] = useState<{ points: (Point | null)[]; scores: number[] } | null>(null);
 
   const handlePose = useCallback(
     (pose: NativePose) => {
+      if (!previewSeen.current) {
+        previewSeen.current = true;
+        setPreviewStarted(true);
+      }
       onPose({
         keypoints: pose.keypoints,
         width: pose.width,
@@ -79,17 +86,8 @@ export function NativePoseCamera({ position, active, debug, highlight, onPose, o
     );
   }
   if (device == null) {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.msg}>Uruchamianie kamery…</Text>
-        <Text style={styles.small}>
-          Jeśli ten komunikat nie znika, telefon nie ma {position === 'back' ? 'tylnej' : 'przedniej'} kamery.
-        </Text>
-        <Pressable style={styles.primary} onPress={onSwitchCamera}>
-          <Text style={styles.primaryText}>Przełącz kamerę</Text>
-        </Pressable>
-      </View>
-    );
+    // Briefly null while the camera list loads; the top bar has a "switch camera" button.
+    return <LoadingCover />;
   }
 
   const fatal = cameraError ?? (status.state === 'error' ? status.message : null) ?? detectorError;
@@ -101,18 +99,19 @@ export function NativePoseCamera({ position, active, debug, highlight, onPose, o
         device={device}
         isActive={active}
         outputs={outputs}
-        resizeMode="contain"
+        resizeMode="cover"
         orientationSource="interface"
+        onPreviewStarted={() => setPreviewStarted(true)}
+        onPreviewStopped={() => {
+          previewSeen.current = false;
+          setPreviewStarted(false);
+        }}
         onError={(e) => setCameraError(`Błąd kamery: ${e.message}`)}
       />
       {debug && overlay && (
         <SkeletonOverlay points={overlay.points} scores={overlay.scores} minScore={VISIBILITY.movenet} highlight={highlight} />
       )}
-      {status.state === 'loading' && (
-        <View style={styles.banner}>
-          <Text style={styles.bannerText}>Ładowanie modelu…</Text>
-        </View>
-      )}
+      {!fatal && (status.state === 'loading' || !previewStarted) && <LoadingCover />}
       {fatal && (
         <View style={[styles.banner, styles.bannerError]}>
           <Text style={styles.bannerText}>{fatal}</Text>

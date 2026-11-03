@@ -36,11 +36,14 @@ export function buildPoseHtml(config: PoseHtmlConfig): string {
   html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden}
   #stage{position:absolute;inset:0}
   video,canvas{position:absolute;inset:0;width:100%;height:100%}
-  video{object-fit:contain}
+  /* Fill the screen (what is visible is always inside the analysed frame). */
+  video{object-fit:cover}
+  /* Hidden until the first frame has been analysed: no flash of a small/black video. */
+  #stage.loading{visibility:hidden}
   .mirror{transform:scaleX(-1)}
 </style>
 </head><body>
-<div id="stage"><video id="video" playsinline muted autoplay></video><canvas id="overlay"></canvas></div>
+<div id="stage" class="loading"><video id="video" playsinline muted autoplay></video><canvas id="overlay"></canvas></div>
 <script type="module">
 const cfg = ${cfg};
 const post = (o) => {
@@ -70,7 +73,7 @@ function draw(lm) {
   ctx.clearRect(0, 0, cw, ch);
   if (!lm) return;
   const vw = video.videoWidth, vh = video.videoHeight;
-  const s = Math.min(cw / vw, ch / vh);
+  const s = Math.max(cw / vw, ch / vh); // object-fit: cover
   const ox = (cw - vw * s) / 2, oy = (ch - vh * s) / 2;
   const P = (i) => [ox + lm[i].x * vw * s, oy + lm[i].y * vh * s, lm[i].visibility ?? 0];
   ctx.lineWidth = 3;
@@ -89,32 +92,37 @@ function draw(lm) {
 
 async function main() {
   post({ type: 'status', state: 'loading' });
-  const vision = await import(cfg.assetsBase + '/vision_bundle.mjs');
-  const fileset = await vision.FilesetResolver.forVisionTasks(cfg.assetsBase + '/wasm');
-  const make = (delegate) => vision.PoseLandmarker.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath: cfg.modelUrl, delegate },
-    runningMode: 'VIDEO',
-    numPoses: 1,
-  });
-  let landmarker, delegate = 'GPU';
-  try { landmarker = await make('GPU'); } catch (e) { delegate = 'CPU'; landmarker = await make('CPU'); }
-
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { facingMode: cfg.facingMode, width: { ideal: 640 }, height: { ideal: 480 } },
+  // Camera and model load IN PARALLEL (the model is ~10 MB + ~13 MB WebAssembly on first use;
+  // afterwards both come from the cache).
+  const camera = navigator.mediaDevices
+    .getUserMedia({ audio: false, video: { facingMode: cfg.facingMode, width: { ideal: 640 }, height: { ideal: 480 } } })
+    .then((stream) => ({ stream }), (e) => ({ error: e }));
+  const model = (async () => {
+    const vision = await import(cfg.assetsBase + '/vision_bundle.mjs');
+    const fileset = await vision.FilesetResolver.forVisionTasks(cfg.assetsBase + '/wasm');
+    const make = (delegate) => vision.PoseLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: cfg.modelUrl, delegate },
+      runningMode: 'VIDEO',
+      numPoses: 1,
     });
-  } catch (e) {
+    try { return { landmarker: await make('GPU'), delegate: 'GPU' }; }
+    catch (e) { return { landmarker: await make('CPU'), delegate: 'CPU' }; }
+  })();
+
+  const cam = await camera;
+  if (cam.error) {
+    const e = cam.error;
     const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
     post({ type: 'error', code: denied ? 'camera-denied' : 'camera', message: String(e && e.message || e) });
     return;
   }
-  video.srcObject = stream;
-  await video.play();
-  post({ type: 'status', state: 'ready', delegate });
+  video.srcObject = cam.stream;
+  const playing = video.play();
+  const { landmarker, delegate } = await model;
+  await playing;
 
   let lastTime = -1;
+  let first = true;
   const tick = () => {
     if (video.readyState >= 2 && video.currentTime !== lastTime && video.videoWidth > 0) {
       lastTime = video.currentTime;
@@ -131,6 +139,12 @@ async function main() {
           flat[i * 3 + 2] = Math.round((lm[i].visibility ?? 0) * 1e3) / 1e3;
         }
       }
+      if (first) {
+        // Show the picture only now: camera running, model loaded, first frame analysed.
+        first = false;
+        stage.classList.remove('loading');
+        post({ type: 'status', state: 'ready', delegate });
+      }
       post({ type: 'pose', t: t0, w: video.videoWidth, h: video.videoHeight, ms, lm: flat });
       if (debug) draw(lm);
     }
@@ -141,4 +155,23 @@ async function main() {
 main().catch((e) => post({ type: 'error', message: String(e && e.message || e) }));
 </script>
 </body></html>`;
+}
+
+/**
+ * Invisible page that only downloads the MediaPipe library, WebAssembly and model into
+ * the WebView HTTP cache (no camera), so opening an exercise later starts quickly.
+ * Uses the same base URL as the camera page (WebKit partitions its cache per site).
+ */
+export function buildPrefetchHtml(assetsBase: string = DEFAULT_ASSETS_BASE, modelUrl: string = DEFAULT_MODEL_URL): string {
+  const urls = JSON.stringify([
+    `${assetsBase}/vision_bundle.mjs`,
+    `${assetsBase}/wasm/vision_wasm_internal.js`,
+    `${assetsBase}/wasm/vision_wasm_internal.wasm`,
+    modelUrl,
+  ]).replace(/</g, '\\u003c');
+  return `<!doctype html><html><head><meta charset="utf-8"></head><body><script>
+const post = (o) => window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(o));
+Promise.all(${urls}.map((u) => fetch(u, { cache: 'force-cache', mode: 'cors' }).then((r) => r.arrayBuffer())))
+  .then(() => post({ type: 'prefetch', ok: true }), (e) => post({ type: 'prefetch', ok: false, message: String(e) }));
+</script></body></html>`;
 }

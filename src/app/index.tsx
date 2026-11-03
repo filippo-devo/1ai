@@ -5,6 +5,8 @@ import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-nat
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { EXERCISE_IDS, type ExerciseId } from '../analysis/config';
 import { EXERCISES } from '../analysis/exercises';
+import { POSE_ENGINE } from '../camera/PoseCamera';
+import { PrefetchPoseAssets } from '../camera/PrefetchPoseAssets';
 import { colors, exerciseTint, radius, withAlpha } from '../ui/theme';
 
 type IconName = keyof typeof MaterialCommunityIcons.glyphMap;
@@ -18,6 +20,7 @@ export default function ExerciseSelectScreen() {
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom', 'left', 'right']}>
+      {POSE_ENGINE === 'web' && <PrefetchPoseAssets />}
       <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
         {EXERCISE_IDS.map((id) => {
           const ex = EXERCISES[id];

@@ -25,4 +25,6 @@ export const cameraStyles = StyleSheet.create({
   },
   bannerError: { backgroundColor: 'rgba(185,28,28,0.92)' },
   bannerText: { color: colors.text, fontSize: 15, textAlign: 'center' },
+  /** Opaque cover shown until the camera AND the pose model are running. */
+  loading: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', backgroundColor: '#000' },
 });

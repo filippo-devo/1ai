@@ -5,8 +5,12 @@ import { VISIBILITY } from '../analysis/config';
 import { COCO_FROM_MEDIAPIPE } from '../pose/mediapipe';
 import { webMessageToPose, type WebPoseMessage } from '../pose/web/messages';
 import { buildPoseHtml, DEFAULT_ASSETS_BASE, DEFAULT_MODEL_URL } from '../pose/web/poseHtml';
+import { LoadingCover } from './LoadingCover';
 import { cameraStyles as styles } from './styles';
 import type { PoseCameraProps } from './types';
+
+/** Same origin for the camera page and the prefetch page, so they share the WebView cache. */
+export const WEB_POSE_BASE_URL = 'https://repcounter.local/';
 
 type WebStatus = 'loading' | 'ready' | 'denied' | 'error';
 
@@ -63,7 +67,7 @@ export function WebPoseCamera({ position, active, debug, highlight, onPose }: Po
     }
   };
 
-  if (!active) return <View style={[StyleSheet.absoluteFill, { backgroundColor: 'black' }]} />;
+  if (!active) return <LoadingCover />;
 
   return (
     <View style={StyleSheet.absoluteFill}>
@@ -71,7 +75,7 @@ export function WebPoseCamera({ position, active, debug, highlight, onPose }: Po
         key={position}
         ref={webRef}
         style={{ flex: 1, backgroundColor: 'black' }}
-        source={{ html, baseUrl: 'https://repcounter.local/' }}
+        source={{ html, baseUrl: WEB_POSE_BASE_URL }}
         originWhitelist={['*']}
         javaScriptEnabled
         allowsInlineMediaPlayback
@@ -88,13 +92,7 @@ export function WebPoseCamera({ position, active, debug, highlight, onPose }: Po
           setError(e.nativeEvent.description);
         }}
       />
-      {status === 'loading' && (
-        <View style={styles.banner} pointerEvents="none">
-          <Text style={styles.bannerText}>
-            Ładowanie modelu pozy… (pierwsze uruchomienie pobiera ok. 10 MB, potem z pamięci podręcznej)
-          </Text>
-        </View>
-      )}
+      {status === 'loading' && <LoadingCover />}
       {status === 'denied' && (
         <View style={styles.center}>
           <Text style={styles.msg}>Brak dostępu do kamery. Włącz dostęp do kamery dla Expo Go w ustawieniach systemu.</Text>

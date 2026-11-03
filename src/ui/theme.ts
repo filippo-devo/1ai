@@ -1,4 +1,4 @@
-import type { ExerciseId } from '../counting/config';
+import type { ExerciseId } from '../analysis/config';
 
 export const colors = {
   bg: '#0B0D10',
@@ -17,13 +17,13 @@ export const colors = {
 
 /** Tint per exercise (icon chips, highlights). */
 export const exerciseTint: Record<ExerciseId, string> = {
-  pushup: '#C6FF3D',
   squat: '#5AC8FA',
-  pullup: '#FF9F43',
-  situp: '#B388FF',
-  bench: '#FFD166',
-  jumprope: '#4DD0E1',
   plank: '#FF6B9A',
+  pushup: '#C6FF3D',
+  bench: '#FFD166',
+  pullup: '#FF9F43',
+  abs: '#B388FF',
+  jumprope: '#4DD0E1',
 };
 
 export const radius = { sm: 10, md: 16, lg: 24, xl: 32 };

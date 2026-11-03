@@ -30,6 +30,22 @@ export const COCO_FROM_MEDIAPIPE: readonly number[] = [
 
 export const MEDIAPIPE_LANDMARKS = 33;
 
+/** MediaPipe heel / foot-index landmarks in FOOT_LANDMARKS order (left_heel, right_heel, left_toe, right_toe). */
+export const FEET_FROM_MEDIAPIPE: readonly number[] = [29, 30, 31, 32];
+
+/** Foot landmarks [x, y, visibility] * 4 (see Pose.feet). */
+export function mediapipeFeet(landmarks: ArrayLike<number>): number[] {
+  const out: number[] = new Array(12);
+  for (let i = 0; i < 4; i++) {
+    const m = FEET_FROM_MEDIAPIPE[i];
+    out[i * 3] = landmarks[m * 3];
+    out[i * 3 + 1] = landmarks[m * 3 + 1];
+    const v = landmarks[m * 3 + 2];
+    out[i * 3 + 2] = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
+  }
+  return out;
+}
+
 /**
  * @param landmarks flat [x, y, visibility] * 33, x/y normalized to the video frame
  * @returns flat [x, y, score] * 17 in the app's keypoint order

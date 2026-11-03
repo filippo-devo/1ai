@@ -1,84 +1,90 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { EXERCISES, type ExerciseId } from '../counting/config';
-import { BODY_PART_PL, type Features } from '../counting/features';
-import type { CounterSnapshot, RepEvent } from '../counting/repCounter';
+import type { CalibrationState } from '../analysis/calibration';
+import { DETECTOR_VERSION } from '../analysis/config';
+import type { AnalysisSnapshot } from '../analysis/session';
+import type { CycleRecord } from '../analysis/types';
 
-const fmt = (v: number | undefined, digits = 0) => (v === undefined || !Number.isFinite(v) ? '–' : v.toFixed(digits));
+const fmt = (v: number | null | undefined, digits = 0) => (v === undefined || v === null || !Number.isFinite(v) ? '–' : v.toFixed(digits));
 
-const EVENT_PL: Record<RepEvent['type'], string> = {
-  rep: 'ZALICZONE',
-  partial: 'niepełne (za płytko)',
-  too_fast: 'odrzucone (za szybko)',
-  reset_lost: 'reset: utrata sylwetki',
-  reset_posture: 'reset: zła pozycja',
+const OUTCOME_PL: Record<CycleRecord['outcome'], string> = {
+  target_reached: 'CEL OSIĄGNIĘTY',
+  target_missed: 'cel nieosiągnięty',
+  unevaluable: 'nieocenialna',
 };
 
-export function describeEvent(e: RepEvent | null): string {
-  if (!e) return '–';
-  const parts = [EVENT_PL[e.type]];
-  if (e.minAngle !== undefined && Number.isFinite(e.minAngle)) parts.push(`min kąt ${e.minAngle.toFixed(0)}°`);
-  if (e.maxDisp !== undefined && Number.isFinite(e.maxDisp)) parts.push(`przem. ${e.maxDisp.toFixed(2)}`);
-  if (e.durationMs !== undefined) parts.push(`${(e.durationMs / 1000).toFixed(1)} s`);
-  return parts.join(', ');
+export function describeCycle(c: CycleRecord): string {
+  const parts = [`#${c.index} ${OUTCOME_PL[c.outcome]}`, `${fmt(c.restValue)}°→${fmt(c.extremeValue)}°`, `${((c.endT - c.startT) / 1000).toFixed(1)} s`];
+  if (c.reasons.length) parts.push(c.reasons.join(','));
+  if (c.flags.length) parts.push(`[${c.flags.join(',')}]`);
+  return parts.join(' ');
 }
 
 interface Props {
-  exercise: ExerciseId;
-  features: Features | null;
-  snapshot: CounterSnapshot | null;
+  snapshot: AnalysisSnapshot | null;
+  calibration: CalibrationState | null;
   fps: number;
   inferenceMs: number;
   cropSize: number;
-  events: RepEvent[];
+  cycles: CycleRecord[];
   engine?: string;
   /** Distance from the top of the camera area (below the top bar). */
   top?: number;
 }
 
-export function DebugPanel({ exercise, features, snapshot, fps, inferenceMs, cropSize, events, engine, top = 4 }: Props) {
-  const info = EXERCISES[exercise];
-  const th = snapshot?.thresholds;
+export function DebugPanel({ snapshot, calibration, fps, inferenceMs, cropSize, cycles, engine, top = 4 }: Props) {
+  const m = snapshot?.metrics;
+  const th = snapshot?.cyclic?.thresholds;
+  const cal = calibration?.result;
   return (
     <View style={[styles.panel, { top }]} pointerEvents="none">
       <Text style={styles.line}>
-        faza: <Text style={styles.strong}>{snapshot?.phase ?? '–'}</Text> | śledzenie: {snapshot?.tracking ?? '–'} | postawa:{' '}
-        {features?.postureOk ? 'OK' : 'NIE'}
+        stan: <Text style={styles.strong}>{snapshot?.state ?? '–'}</Text> | faza: {snapshot?.phase ?? '–'} | postawa:{' '}
+        {m?.posture === null || m?.posture === undefined ? '?' : m.posture ? 'OK' : 'NIE'}
       </Text>
       <Text style={styles.line}>
-        {info.primaryLabel}: {fmt(features?.primary)}° (wygł. {fmt(snapshot?.angle)}°) | strona: {features?.side ?? '–'}
+        wartość: {fmt(m?.primary)} (filtr {fmt(snapshot?.cyclic?.value)}) | strona: {m?.side ?? '–'}
+        {m?.oneSided ? ' (jednostronnie)' : ''} | jakość {fmt(m?.quality, 2)} | pokrycie 3 s {fmt((snapshot?.coverage ?? 0) * 100)}%
       </Text>
-      <Text style={styles.line}>
-        {info.auxLabel}: {fmt(snapshot?.disp, 2)} | pewność: {fmt(features?.confidence, 2)}
-      </Text>
-      {features && !features.valid && features.missing.length > 0 && (
-        <Text style={styles.line}>brak: {features.missing.map((m) => BODY_PART_PL[m]).join(', ')}</Text>
-      )}
       {th && (
         <Text style={styles.line}>
-          progi: start ≥{fmt(th.startEnterDeg)}° (wyjście &lt;{fmt(th.startExitDeg)}°), cel ≤{fmt(th.targetEnterDeg)}° (wyjście &gt;
-          {fmt(th.targetExitDeg)}°) i przem. ≥{fmt(th.auxTargetEnter, 2)}
+          progi: spocz. {fmt(Number.isFinite(th.base) ? th.base : null)} wej. {fmt(th.restEnter)} / wyj. {fmt(th.restExit)} | cel {fmt(th.target)} |
+          min. amplituda {fmt(th.minAmplitude)}
         </Text>
       )}
-      {features &&
-        Object.entries(features.debug).map(([k, v]) => (
-          <Text key={k} style={styles.line}>
-            {k}: {fmt(v, 1)}
-          </Text>
-        ))}
+      {m && Object.keys(m.values).length > 0 && (
+        <Text style={styles.line}>
+          {Object.entries(m.values)
+            .map(([k, v]) => `${k}=${fmt(v, Math.abs(v ?? 0) < 2 ? 2 : 0)}`)
+            .join(' ')}
+        </Text>
+      )}
+      {snapshot?.plank && (
+        <Text style={styles.line}>
+          deska: w tol. {fmt(snapshot.plank.stats.inToleranceMs / 1000, 1)} s | ocenialny {fmt(snapshot.plank.stats.evaluableMs / 1000, 1)} s |
+          poza: {snapshot.plank.failing.join(',') || '–'} | odchyl. bioder {fmt(snapshot.plank.hipDev, 3)}
+        </Text>
+      )}
+      {snapshot?.jump && (
+        <Text style={styles.line}>
+          skoki: {snapshot.jump.stats.jumps} | stopy {fmt(snapshot.jump.feetHeight, 3)} biodra {fmt(snapshot.jump.hipHeight, 3)} | ocena{' '}
+          {snapshot.jump.evaluation} | palce: {snapshot.jump.stats.toeRaises}
+        </Text>
+      )}
+      <Text style={styles.line}>
+        kalibracja: {cal ? `spocz. ${fmt(cal.rest)}°, szum ${fmt(cal.noise, 1)}°, dostępność ${fmt(cal.availability * 100)}%` : '–'}
+      </Text>
       <Text style={styles.line}>
         {engine ? `${engine} | ` : ''}
-        {fmt(fps, 1)} fps | inferencja {fmt(inferenceMs)} ms{Number.isFinite(cropSize) ? ` | crop ${fmt(cropSize * 100)}%` : ''}
+        {fmt(fps, 1)} fps | inferencja {fmt(inferenceMs)} ms{Number.isFinite(cropSize) ? ` | crop ${fmt(cropSize * 100)}%` : ''} | {DETECTOR_VERSION}
       </Text>
-      <Text style={styles.line}>
-        powt.: {snapshot?.reps ?? 0} | niepełne: {snapshot?.partials ?? 0}
-      </Text>
-      {events
+      {snapshot?.hint && <Text style={styles.hint}>wskazówka ({snapshot.hint.kind}): {snapshot.hint.text}</Text>}
+      {cycles
         .slice(-4)
         .reverse()
-        .map((e, i) => (
-          <Text key={`${e.t}-${i}`} style={styles.event}>
-            #{e.reps} {describeEvent(e)}
+        .map((c) => (
+          <Text key={`${c.index}-${c.endT}`} style={styles.event}>
+            {describeCycle(c)}
           </Text>
         ))}
     </View>
@@ -89,13 +95,13 @@ const styles = StyleSheet.create({
   panel: {
     position: 'absolute',
     left: 4,
-    top: 4,
     right: 4,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     padding: 6,
     borderRadius: 6,
   },
-  line: { color: 'white', fontSize: 11, fontFamily: 'monospace' },
+  line: { color: 'white', fontSize: 10.5, fontFamily: 'monospace' },
   strong: { fontWeight: 'bold', color: '#facc15' },
-  event: { color: '#a5f3fc', fontSize: 11, fontFamily: 'monospace' },
+  hint: { color: '#fde68a', fontSize: 10.5, fontFamily: 'monospace' },
+  event: { color: '#a5f3fc', fontSize: 10.5, fontFamily: 'monospace' },
 });

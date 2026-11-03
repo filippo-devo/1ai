@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Downloads two public exercise demo videos (Ultralytics assets), runs the bundled
 # MoveNet model on them exactly like the app does (scripts/verify/extract_movenet.py)
-# and replays the results through the app's counting code (__tests__/realVideo.test.ts).
+# and replays the results through the app's analysis code (npm run evaluate, scripts/evaluate/manifest.json).
 #
 # Requirements: python3 (venv), curl, node/npm. Videos and derived data stay in
 # fixtures/ (gitignored) — they are third-party material, used only for local testing.
@@ -19,18 +19,21 @@ done
 
 if [ ! -x .venv/bin/python ]; then
   python3 -m venv .venv
-  .venv/bin/pip install -q ai-edge-litert opencv-python-headless numpy
+  .venv/bin/pip install -q ai-edge-litert opencv-python-headless numpy mediapipe
+fi
+MP_MODEL=fixtures/pose_landmarker_full.task
+if [ ! -s "$MP_MODEL" ]; then
+  curl -sSL -o "$MP_MODEL" https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task
 fi
 
 for name in pushups squats; do
   .venv/bin/python scripts/verify/extract_movenet.py "fixtures/videos/$name.mp4" "fixtures/real/$name.json"
   .venv/bin/python scripts/verify/extract_movenet.py "fixtures/videos/$name.mp4" "fixtures/real/${name}_every3.json" --every 3
+  # MediaPipe (Expo Go engine); needs libEGL on Linux.
+  .venv/bin/python scripts/verify/extract_mediapipe.py "fixtures/videos/$name.mp4" "fixtures/real/mp_${name}_full.json" "$MP_MODEL" || echo "MediaPipe extraction skipped"
 done
 
-# Optional: your own pull-up recording (4 full reps expected by the test):
-if [ -s fixtures/videos/pullups.mp4 ]; then
-  .venv/bin/python scripts/verify/extract_movenet.py fixtures/videos/pullups.mp4 fixtures/real/pullups.json
-  .venv/bin/python scripts/verify/extract_movenet.py fixtures/videos/pullups.mp4 fixtures/real/pullups_every3.json --every 3
-fi
+# Your own recordings: extract them the same way and add entries (with labelled
+# completion times and split "tune"/"test") to scripts/evaluate/manifest.json.
 
-npx jest __tests__/realVideo.test.ts --verbose
+npm run evaluate

@@ -1,4 +1,4 @@
-import { mediapipeToCoco } from '../mediapipe';
+import { mediapipeFeet, mediapipeToCoco } from '../mediapipe';
 import { NUM_KEYPOINTS, type Pose } from '../types';
 
 /** Pose message posted by the WebView page (src/pose/web/poseHtml.ts). */
@@ -14,8 +14,10 @@ export interface WebPoseMessage {
 export function webMessageToPose(m: WebPoseMessage): Pose {
   return {
     keypoints: m.lm ? mediapipeToCoco(m.lm) : new Array<number>(NUM_KEYPOINTS * 3).fill(0),
+    feet: m.lm ? mediapipeFeet(m.lm) : new Array<number>(12).fill(0),
     width: m.w,
     height: m.h,
     timestamp: m.t,
+    source: 'mediapipe',
   };
 }

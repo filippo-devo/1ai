@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Camera, useCameraDevice, useCameraPermission, type CameraRef } from 'react-native-vision-camera';
 import { SkeletonOverlay } from '../components/SkeletonOverlay';
-import { TRACKING } from '../counting/config';
+import { VISIBILITY } from '../analysis/config';
 import { gpuResizerSupported, usePoseDetection, type DetectedPose as NativePose } from '../hooks/usePoseDetection';
 import type { Point } from '../pose/types';
 import { cameraStyles as styles } from './styles';
@@ -25,6 +25,7 @@ export function NativePoseCamera({ position, active, debug, highlight, onPose, o
         width: pose.width,
         height: pose.height,
         timestamp: pose.timestamp,
+        source: 'movenet',
         inferenceMs: pose.inferenceMs,
         cropSize: pose.crop.size,
       });
@@ -105,7 +106,7 @@ export function NativePoseCamera({ position, active, debug, highlight, onPose, o
         onError={(e) => setCameraError(`Błąd kamery: ${e.message}`)}
       />
       {debug && overlay && (
-        <SkeletonOverlay points={overlay.points} scores={overlay.scores} minScore={TRACKING.minKeypointScore} highlight={highlight} />
+        <SkeletonOverlay points={overlay.points} scores={overlay.scores} minScore={VISIBILITY.movenet} highlight={highlight} />
       )}
       {status.state === 'loading' && (
         <View style={styles.banner}>

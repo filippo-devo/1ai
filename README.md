@@ -1,4 +1,4 @@
-# RepCounter — prototyp licznika pompek, przysiadów i podciągnięć
+# RepCounter — analiza ćwiczeń z kamery telefonu (prototyp)
 
 Aplikacja mobilna (Expo / React Native), która liczy powtórzenia na żywo na podstawie
 estymacji pozy z kamery telefonu. Obraz jest przetwarzany **wyłącznie na urządzeniu**:
@@ -116,101 +116,91 @@ W trybie debugowania aplikacji (przełącznik „Debug”) widać fps i czas „
 
 ## 3. Przebieg treningu
 
-1. **Wybór ćwiczenia** (+ przełączniki: odczyt głosowy, tryb debugowania).
-2. **Ustawienie**: podgląd kamery (pokazywany cały kadr analizowany przez model — `resizeMode="contain"`),
-   przycisk przedniej/tylnej kamery, instrukcja ustawienia telefonu dla ćwiczenia (orientacja,
-   odległość, kąt, wymagane części ciała), lista widoczności: ✓/✗ barki, łokcie, nadgarstki, biodra…
-3. **Kalibracja** (automatyczna): przyjmij pozycję startową i nie ruszaj się ~1,2 s
-   (pompki: podpór na prostych rękach, przysiady: stanie, podciągnięcia: zwis na prostych rękach).
-   Mierzy kąt startowy i dopasowuje do niego próg pozycji startowej.
-4. **Start** (aktywny po kalibracji) → **5 s odliczania** → automatyczne liczenie.
-5. **Trening**: duży licznik, czas (bez pauz), komunikat fazy, przyciski **Pauza/Wznów** i **Zakończ**.
-   Gdy sylwetka zniknie: czerwony komunikat **„Ustaw się w kadrze”** (+ czego nie widać), liczenie wstrzymane.
-6. **Podsumowanie**: ćwiczenie, liczba powtórzeń, czas (+ liczba niepełnych powtórzeń).
+1. **Wybór ćwiczenia**: przysiad, deska (na przedramionach), pompka, wyciskanie (płaska ławka),
+   podciąganie (ścisłe), brzuszki (crunch / sit-up), skakanka (podskoki obunóż).
+   Aplikacja **nie rozpoznaje sama, jakie to ćwiczenie** – wybiera je użytkownik.
+2. **Ustawienie**: wariant (pompka klasyczna / na kolanach, crunch / sit-up), **cel zakresu**
+   (np. kolano ≤ 100°, z przyciskami −/+), instrukcja ustawienia telefonu, lista widocznych punktów ciała.
+3. **Kalibracja**: krótkie przytrzymanie pozycji startowej (~1,2 s) mierzy osobniczy wyprost,
+   szum pomiaru i dostępność punktów. Opcjonalnie 2–3 spokojne ruchy mierzą **zakres** – zapisywany
+   osobno i **nigdy** nieprzyjmowany automatycznie jako cel.
+4. **Start** → 5 s odliczania → analiza.
+5. **Trening**: duża liczba (cykle z osiągniętym celem / czas w tolerancji / podskoki), pod nią
+   rozbicie (cykle, cel nieosiągnięty, nieocenialne), **jedna wskazówka naraz**, czas, pauza, koniec.
+6. **Podsumowanie**: liczby rozdzielone na kategorie, pomiary zakresu i tempa, jakość danych,
+   lista kryteriów „Nie można ocenić z tego ustawienia” i „Niedostępne”. Bez oceny techniki 0–100.
 
-Przetwarzanie zatrzymuje się, gdy ekran treningu nie jest aktywny (nawigacja, aplikacja w tle —
-wtedy trening automatycznie się pauzuje); po opuszczeniu ekranu kamera jest zwalniana.
-Odmowa uprawnień: ekran z prośbą o dostęp, a po trwałej odmowie — przycisk do ustawień systemu.
+Przetwarzanie zatrzymuje się po opuszczeniu ekranu i w tle (trening się pauzuje). Nic nie jest nagrywane
+ani zapisywane – wynik ostatniego treningu jest tylko w pamięci aplikacji.
 
 ---
 
-## 4. Jak działa wykrywanie
+## 4. Architektura analizy
 
 ```
-Frame (YUV, VGA 4:3)
-  └─ Resizer GPU: obrót do pionu, YUV→RGB, 'contain' do 384×384 (czarne pasy)
-       └─ smart crop: kwadrat wokół osoby z poprzedniej klatki → 192×192 (src/pose/crop.ts)
-            └─ MoveNet Lightning (TFLite, CPU) → 17 punktów (y, x, pewność)
-                 └─ mapowanie: crop → kwadrat → obraz pionowy (src/pose/movenet.ts)
-                      └─ wątek JS: cechy ćwiczenia → kalibracja / maszyna stanów
+kamera ─▶ adapter modelu (src/pose, src/camera)          MoveNet 17 pkt | MediaPipe 33 pkt (+pięty, palce)
+           obrót, crop, letterbox, odbicie cofnięte → współrzędne obrazu x·szer., y·wys. (piksele)
+        ─▶ geometria (src/analysis/geometry.ts)          kąty, odchylenie podpisane, nachylenia; brak punktu ⇒ null
+        ─▶ metryki ćwiczenia (src/analysis/metrics.ts)   wymagane punkty, wybór strony, jakość, postawa
+        ─▶ filtracja (src/analysis/filters.ts)           One Euro / EMA z rzeczywistego Δt (nie liczby klatek)
+        ─▶ kalibracja (src/analysis/calibration.ts)      wyprost, szum, dostępność; zmierzony zakres osobno
+        ─▶ detektory (src/analysis/detectors/*)          cykle | deska | podskoki
+        ─▶ wskazówki i wyniki (hints.ts, session.ts)     jedna wskazówka; rekordy cykli i podsumowanie
+        ─▶ prezentacja (src/app, src/components)
 ```
 
-**Smart crop** to algorytm kadrowania zalecany przez autorów MoveNet. Bez niego na dole pompki
-(sylwetka zajmuje kilkadziesiąt pikseli w wejściu 192 px) model gubił ręce — na prawdziwym
-nagraniu pompek liczba zaliczonych powtórzeń wynosiła **0/4 bez cropa i 4/4 z cropem** (sekcja 6).
+Cała logika od geometrii do wyników jest czysto obliczeniowa i testowana bez kamery
+na zapisanych lub syntetycznych sekwencjach landmarków (`src/testing`, `__tests__`).
 
-### Sygnały na ćwiczenie (`src/counting/features.ts`)
+### Geometria i konwencje
+- `angle(A,B,C)` – wierzchołek w B: `acos(clamp(dot(A−B,C−B)/(|A−B||C−B|), −1, 1))`, w stopniach;
+  brakujący punkt lub odcinek krótszy niż 2 px ⇒ **niedostępne** (null), nigdy wartość zastępcza.
+- 180° = wyprost. Kolano = biodro–kolano–kostka, łokieć = bark–łokieć–nadgarstek,
+  biodro = bark–biodro–kolano, linia ciała = bark–biodro–kostka. Nachylenie tułowia do podłoża to osobna metryka.
+- Współrzędne: znormalizowane wartości są przeliczane na piksele (x·szerokość, y·wysokość) obrazu po
+  cofnięciu obrotu, cropa, letterboxingu i odbicia. Nie są mieszane ze współrzędnymi 3D (world) –
+  aplikacja ich nie używa; zmiana sposobu pomiaru wymagałaby ponownej walidacji progów.
+- Odchylenie bioder: podpisana odległość od linii bark–kostka ÷ długość tej linii;
+  **+** = poniżej linii (opadanie), **−** = powyżej (uniesienie), niezależnie od kierunku, w którym stoi osoba.
 
-**Deska** jest liczona w czasie, nie w powtórzeniach (`src/counting/plankTimer.ts`): czas rośnie tylko wtedy, gdy
-pozycja jest poprawna przez co najmniej 0,4 s (histereza kąta 160°/148°, kalibracja może obniżyć próg do 152°).
-Opadające biodra, wstanie, położenie się lub wyjście z kadru zatrzymują zegar; czas, gdy osoby nie widać, nigdy nie jest doliczany.
-Odczyt głosowy co 10 s. Testy: `__tests__/plank.test.ts`.
+### Wiarygodność
+- Każda metryka ma wartość albo „niedostępne”, jakość (minimalna pewność użytych punktów) i stronę pomiaru.
+- Oceniane są tylko punkty wymagane dla danej metryki. Próg widoczności zależy od modelu
+  (MediaPipe 0,7 – „visibility”; MoveNet 0,3 – inna skala) i **nie oznacza dokładności kąta**.
+- Widok boczny: jedna strona, **nigdy uśredniana** z zasłoniętą. Widok z przodu (podciąganie): obie strony
+  uśredniane tylko, gdy obie są widoczne; inaczej pomiar jednostronny (oznaczony w wynikach).
+- Strona jest **blokowana na czas powtórzenia**: jej utrata ⇒ brak danych (luka), a nie przeskok na drugą stronę.
 
-**Skakanka** (`src/counting/jumpCounter.ts`): poziom podłogi = 60. percentyl pozycji pionowej z ostatnich 1,5 s,
-skok = uniesienie ≥ 2% długości nogi i lądowanie ≤ 0,8% (histereza), lot 50–900 ms, min. 220 ms między skokami;
-odczyt głosowy co 10 skoków. Na prawdziwym nagraniu (stanie w miejscu) drgania MediaPipe to 0,4–0,8% długości nogi,
-MoveNet 1,4–4% — dlatego w buildzie natywnym (MoveNet) progi są wyższe (6% / 2,5%, skoki od ok. 5 cm).
-Bardzo niskie skoki (< ok. 3 cm) mogą zostać pominięte. Testy: `__tests__/jumprope.test.ts`. Brzuszki i deska są sprawdzone tylko na danych syntetycznych.
+### Detektor cykli (wszystkie ćwiczenia na powtórzenia)
+Stany techniczne: `NOT_READY → READY → ACTIVE`, oraz `TRACKING_LOST`. Fazy cyklu: ruch od pozycji
+startowej → strefa celu → powrót. Zasady:
+- histereza progów (np. przysiad: wejście w „górę” ≥ 165°, wyjście < 155°),
+- wymagane przejście przez kolejne fazy, minimalna amplituda = max(próg, 4 × zmierzony szum),
+- **koniec ruchu potwierdzany zmianą kierunku** – zatrzymanie w dole nie jest potrzebne,
+- osiągnięcie celu zapisywane **osobno** od wykrycia cyklu,
+- osobny minimalny czas cyklu dla każdego ćwiczenia (skakanka ma własny, szybki detektor),
+- luka w danych dłuższa niż 250 ms w trakcie cyklu ⇒ cykl **nieocenialny** i ponowna synchronizacja w pozycji
+  startowej (punkty sprzed luki nie są używane).
 
-| Ćwiczenie | Kąt główny (duży = start) | Sygnał pomocniczy (względem pozycji startowej, ÷ długość segmentu) | Kontrola postawy |
+### Reguły ćwiczeń (progi robocze w `src/analysis/config.ts`)
+| Ćwiczenie | Liczenie | Cel zakresu (domyślny, zmienialny) | Monitorowane / uwagi |
 |---|---|---|---|
-| Pompki | łokieć (bark–łokieć–nadgarstek) | opuszczenie barków w kierunku dłoni ÷ długość ręki | tułów (bark–biodro) ≤ 50° od poziomu, barki nad dłońmi |
-| Przysiady | kolano (biodro–kolano–kostka) | obniżenie bioder ÷ długość uda | tułów ≥ 25° od poziomu, barki nad biodrami nad kostkami |
-| Podciągnięcia | łokieć | uniesienie barków w kierunku dłoni ÷ długość ręki | dłonie nad barkami (zwis) |
-| Brzuszki | biodro (bark–biodro–kolano), ~135° leżenie → ≤80° siad | uniesienie barków nad biodra ÷ długość tułowia | biodra i stopy na podłodze, kolana zgięte |
-| Wyciskanie na ławce | łokieć | opuszczenie nadgarstków (sztangi) ku barkom ÷ długość ręki | tułów poziomo, dłonie nad barkami |
-| Skakanka (skoki) | – | wysokość bioder i stóp nad poziomem podłogi ÷ długość nogi | stanie prosto |
-| Deska (czas) | linia ciała (bark–biodro–kostka) ≥160° | – | ciało poziomo, barki uniesione nad podłogą, łokcie pod barkami |
+| Przysiad | kolano: góra ≥ 165° **i** biodra wróciły do stania (bark–biodro–kolano ≥ 150°) | kolano ≤ 100° (opcje 110…70°) | nachylenie tułowia tylko informacyjnie; wyjście kolan przed palce nie jest karane |
+| Deska | czas | łokieć 80–100°, kolano ≥ 165°, bark–biodro–kolano ≥ 165°, \|odchylenie bioder\| ≤ 0,05 (+ tolerancja szumu, histereza) | czas: całkowity, w pozycji, ocenialny, w tolerancji, najdłuższy ciągły, nieocenialny |
+| Pompka | łokieć: góra ≥ 165° | łokieć ≤ 100° **i** barki w dół o ≥ 0,2 długości ręki | linia ciała (bark–biodro–kostka / –kolano) do 15° – wskazówka; wykrycie wariantu na kolanach |
+| Wyciskanie | łokieć: góra ≥ 165°; licznik aktywny dopiero po **1 s stabilnego wyprostu** | łokieć ≤ 100° **i** nadgarstki w dół o ≥ 0,2 długości ręki | ruch głównie poziomy (zdejmowanie/odkładanie) nie jest liczony; kontakt z klatką, tor i prędkość sztangi **niedostępne** |
+| Podciąganie (ścisłe) | łokieć: dół ≥ 160° | łokieć ≤ 90° **i** barki w górę o ≥ 0,3 długości ręki | broda nad drążkiem **niezweryfikowana** (brak detekcji drążka i brody); kołysanie tylko z widoku z boku |
+| Crunch | nachylenie biodro–bark względem pozycji leżącej | +20° (opcje 15–30°) | sam ruch głowy nie jest liczony; to nie jest pomiar zgięcia lędźwiowego |
+| Sit-up | nachylenie biodro–bark względem podłoża | ≥ 60° (opcje 60–80°) | jw. |
+| Skakanka | podskok = wybicie (obie stopy i biodra nad poziomem podłogi) → lot → lądowanie | – | z palcami stóp (MediaPipe) odróżnia skok od wspięcia na palce; bez palców (MoveNet) status „ograniczona”; rytm, przerwy, regularność; to „podskoki”, nie obroty skakanki |
 
-Strona ciała: pompki — strona z wyższą pewnością (druga ręka jest zasłonięta przy widoku z boku);
-przysiady i podciągnięcia — średnia obu stron, gdy obie są widoczne.
+Wszystkie wartości to **robocze parametry detektora, a nie normy medyczne ani zwalidowany standard techniki**.
+Każda zmiana progów lub sposobu pomiaru powinna podbić `DETECTOR_VERSION` i zostać sprawdzona na danych testowych.
 
-**Podciągnięcia:** model nie rozpoznaje drążka, więc aplikacja **nie sprawdza, czy broda jest
-nad drążkiem**. Zalicza ruch: proste ręce → zgięte łokcie i barki uniesione ku dłoniom → proste ręce.
-
-### Maszyna stanów (`src/counting/repCounter.ts`)
-
-```
-unknown ──(pozycja startowa)──▶ start ──▶ down ──▶ target ──▶ up ──▶ start  ⇒ +1
-                                  ▲          │                 │
-                                  └──────────┘ (powrót bez osiągnięcia celu ⇒ „niepełne”, bez liczenia)
-```
-
-- Powtórzenie liczy się **dopiero po powrocie do pozycji startowej** po osiągnięciu celu: jeden pełny cykl = 1.
-- Cel wymaga **jednocześnie** kąta ≤ próg i przemieszczenia ≥ próg.
-- **Histereza**: osobne progi wejścia i wyjścia (np. start ≥150°, wyjście <138°), więc szum przy progu nie przełącza fazy.
-- **Wygładzanie**: filtr One Euro (adaptacyjny — mocno wygładza drgania w bezruchu, mało opóźnia szybki ruch, więc działa przy różnym tempie).
-- **Potwierdzenie fazy**: zmiana fazy wymaga 2 kolejnych klatek (pojedyncze „skoki” punktów są ignorowane).
-- **Minimalny czas powtórzenia** (300–450 ms): szybsze „cykle” traktowane jako drgania.
-- **Proporcje ciała**: przemieszczenia są dzielone przez długości segmentów mierzone na żywo,
-  a punkt odniesienia jest pobierany w pozycji startowej każdego powtórzenia — niezależne od wzrostu i odległości od kamery.
-- **Utrata sylwetki**: brak wymaganego punktu (pewność < 0,3) przez < 400 ms — faza zamrożona;
-  dłużej — stan `lost`, komunikat „Ustaw się w kadrze”, **faza resetowana do `unknown`**.
-  Przerwane powtórzenie przepada, a po powrocie trzeba najpierw ponownie przyjąć pozycję startową —
-  **ponowne wykrycie sylwetki nigdy samo nie dodaje powtórzenia**. To samo po pauzie i zmianie kamery.
-- **Zła postawa** (np. wstanie w trakcie pompek, puszczenie drążka) przez 6 klatek — reset fazy.
-
-### Strojenie progów
-Wszystkie progi są w jednym pliku: **`src/counting/config.ts`** (opisane komentarzami).
-Najważniejsze:
-- `targetEnterDeg` / `auxTargetEnter` — wymagana głębokość (np. przysiad: kolano ≤ 100°, biodra ≥ 0,30 długości uda w dół),
-- `startEnterDeg` / `startExitDeg` — pozycja startowa (kalibracja może go obniżyć do `minStartEnterDeg`),
-- `minRepMs`, `dwellFrames`, `TRACKING.lostAfterMs`, `TRACKING.minKeypointScore`, parametry filtrów.
-
-Tryb debugowania pokazuje: szkielet (zielone = punkty pewne, czerwone = niepewne, duże = używane przez ćwiczenie),
-kąty surowe i wygładzone, przemieszczenie, pewność, stronę ciała, fazę, aktualne progi, fps
-i **historię zdarzeń z uzasadnieniem** (np. `#3 ZALICZONE, min kąt 72°, przem. 0.55, 1.4 s`
-albo `niepełne (za płytko)`), więc widać, dlaczego powtórzenie zostało (nie)zaliczone.
+### Wskazówki
+Najwyżej jedna naraz. Problemy z kamerą i widocznością (`setup`) mają pierwszeństwo; wskazówki o technice
+pokazują się dopiero po utrzymującym się odchyleniu (0,7 s – opóźnienie dotyczy tylko komunikatów, nie liczenia).
+Przy słabym obrazie aplikacja najpierw prosi o poprawienie ustawienia telefonu.
 
 ---
 
@@ -228,107 +218,112 @@ npm run typecheck
 npm run lint
 ```
 
-- `__tests__/counting.test.ts` — logika zliczania na zsyntetyzowanych sekwencjach pozy
-  (kinematyka 2D, deterministyczny szum) dla **każdego z trzech ćwiczeń**: pełne powtórzenia,
-  niepełne (zgłaszane jako „niepełne”, nie liczone), drgania w pozycji startowej, drżenie ±12°,
-  „sprężynowanie” na dole, pojedyncze skoki punktów, tempo szybkie/wolne, 10/30/60 fps,
-  różne proporcje ciała i odległości, utrata sylwetki w trakcie powtórzenia, wielokrotne
-  znikanie i pojawianie się, zniknięcie na dole i powrót na górze, krótki zanik (2 klatki),
-  kalibracja i jej warunki, bramki postawy, spójność progów.
-- `__tests__/pose.test.ts` — dekodowanie MoveNet, letterbox, orientacja klatek, crop, próbkowanie.
-- `__tests__/realVideo.test.ts` — odtwarza wyniki **prawdziwego modelu** na **prawdziwych nagraniach**
-  przez kod aplikacji (sekcja 6). Bez danych testy są pomijane.
+- `__tests__/analysis.test.ts` – geometria; dla każdego ćwiczenia na powtórzenia: pełne i częściowe ruchy,
+  stanie i drżenie detekcji, małe oscylacje, płynne powtórzenia bez pauzy, zatrzymanie w połowie ruchu,
+  szybkie i bardzo wolne tempo, 10/30/60 fps, różne proporcje obrazu i sylwetki, utrata punktów w kluczowej
+  fazie, powrót do kadru; zasłonięta strona i jednostronny pomiar; brak przeskoku strony w trakcie powtórzenia;
+  cel ustawiony przez użytkownika; wariant na kolanach; zdejmowanie i odkładanie sztangi; podciąganie bez
+  weryfikacji brody; sam ruch głowy; kalibracja (zakres nie staje się celem); wskazówki.
+- `__tests__/plank.test.ts` – deska: prosta, opadające i uniesione biodra (oba kierunki ustawienia),
+  brak danych, ukryty nadgarstek (kryterium nieocenialne), drżenie, wstanie, FPS i rozmiary sylwetki.
+- `__tests__/jump.test.ts` – podskoki: różne wysokości i tempo, 15–60 fps, **wspięcia na palce**, stanie,
+  odejście od kamery, brak punktów palców (MoveNet), jedna stopa, rytm/przerwy/regularność, wyjście z kadru.
+- `__tests__/pose.test.ts` – adapter modelu (letterbox, orientacja, crop, MediaPipe → COCO, pięty/palce).
+- `__tests__/evaluation.test.ts` – ewaluacja na nagraniach z ręcznie opisanymi powtórzeniami (sekcja 6).
 
-## 6. Weryfikacja na prawdziwych nagraniach (bez telefonu)
+Testy syntetyczne sprawdzają **logikę**, nie dokładność na prawdziwej kamerze.
+
+## 6. Strojenie i ewaluacja na nagraniach
 
 ```bash
 npm run verify:videos
 ```
 
-Skrypt pobiera dwa publiczne nagrania demo (Ultralytics), uruchamia **ten sam plik modelu** w LiteRT,
-emulując potok aplikacji (resizer 'contain' 384 → smart crop → 192), i przepuszcza wyniki przez
-kod TS aplikacji. Test krzyżowy potwierdza, że TS i Python liczą identyczne regiony cropa w każdej klatce.
-Nagrania i dane pochodne trafiają do `fixtures/` (ignorowane przez git).
+```bash
+npm run evaluate
+```
 
-| Nagranie | Prawda (policzone ręcznie) | 30 fps | co 3. klatka (~10 fps) | bez smart crop |
-|---|---|---|---|---|
-| Pompki, widok z boku, 1920×1080 | 4 | **4** | **4** | 0 (gubienie rąk na dole) |
-| Przysiady, widok ~45°, 1920×1080 | 4 | **4** | **4** | 4 |
-| Podciągnięcia | — | brak publicznego nagrania dostępnego w środowisku | | |
+`verify:videos` pobiera dwa publiczne nagrania demo i zapisuje z nich landmarki MoveNet (potok jak w aplikacji);
+`scripts/verify/extract_mediapipe.py` robi to samo dla MediaPipe (silnik Expo Go). Pliki trafiają do `fixtures/`
+(nieśledzone przez git – cudze nagrania).
 
-Dodatkowo na prawdziwych danych pompek zasymulowano zasłonięcie osoby w trakcie 3. powtórzenia:
-licznik pokazuje 3 (przepada tylko przerwane powtórzenie, powrót sylwetki niczego nie dolicza).
+Opisy powtórzeń są w `scripts/evaluate/manifest.json`: czas zakończenia każdego powtórzenia, ćwiczenie,
+wariant i **podział `tune` / `test`**. Progi wolno stroić tylko na nagraniach `tune`; raport dokładności podaje się
+tylko dla `test`. Raport zawiera: trafione, **nieocenialne**, pominięte, fałszywe powtórzenia, błąd liczby
+i udział klatek bez danych.
 
-Silnik Expo Go (MediaPipe Pose Landmarker, `scripts/verify/extract_mediapipe.py`, ten sam model co w WebView),
-przez `mediapipeToCoco()` i ten sam licznik: **pompki 4/4, przysiady 4/4** — modele full i lite, 30 i ~10 kl./s.
-Strona WebView została dodatkowo uruchomiona w headless Chromium z wirtualną kamerą odtwarzającą nagranie pompek:
-kamera, model i nakładka szkieletu działają.
+Aktualny wynik (wersja `v2.0-2026-11-03`; wszystkie nagrania w `test`, brak danych `tune` – progi nie były
+strojone pod te nagrania):
 
-Własne nagranie podciągnięć: zapisz jako `fixtures/videos/pullups.mp4` (4 pełne powtórzenia) i uruchom skrypt ponownie.
+| Nagranie (test) | Opisane | Trafione | Nieocenialne | Pominięte | Fałszywe | Klatki bez danych |
+|---|---|---|---|---|---|---|
+| Pompki, MoveNet 30 fps | 4 | 4 | 0 | 0 | 0 | 9,1% |
+| Pompki, MoveNet ~10 fps | 4 | 2 | 2 | 0 | 0 | 12,9% |
+| Pompki, MediaPipe 30 fps | 4 | 4 | 0 | 0 | 0 | 0,0% |
+| Przysiady, MoveNet 30 fps | 4 | 4 | 0 | 0 | 0 | 6,3% |
+| Przysiady, MoveNet ~10 fps | 4 | 3 | 1 | 0 | 0 | 8,1% |
+| Przysiady, MediaPipe 30 fps | 4 | 4 | 0 | 0 | 0 | 0,0% |
 
----
+To **2 nagrania, 1 osoba, 1 ustawienie kamery** – za mało, by deklarować dokładność. Przy ~10 fps MoveNet gubi
+punkty na dole ruchu dłużej niż 250 ms; detektor uczciwie oznacza wtedy próbę jako nieocenialną zamiast zgadywać.
 
-## 7. Co zostało przetestowane, a co wymaga jeszcze weryfikacji
+Własne nagrania: dodaj pliki do `fixtures/` i wpisy do manifestu (`split: "tune"` dla strojenia, `"test"` dla oceny),
+z różnymi sylwetkami i ustawieniami telefonu.
 
-**Przetestowane w tym środowisku (bez telefonu):**
-- logika zliczania, kalibracja, histereza, wygładzanie, utrata sylwetki — testy jednostkowe (wszystkie 3 ćwiczenia);
-- sygnatura modelu i jego działanie na prawdziwych nagraniach pompek i przysiadów (liczba powtórzeń zgodna z ręcznym liczeniem, również przy ~10 fps);
-- zgodność implementacji cropa TS ↔ Python, mapowanie współrzędnych (letterbox, orientacja — zgodnie z kodem shadera resizera);
-- typecheck, lint, zbudowanie bundli JS dla Androida i iOS (`expo export`) — worklety poprawnie transformowane, model dołączony jako asset;
-- `expo prebuild`: uprawnienie kamery, `minSdkVersion 26`, opis uprawnienia na iOS, obrót ekranu;
-- `expo-doctor`: 18/20 (2 testy wymagają API Expo, niedostępnego w środowisku).
+## 7. Co zostało przetestowane, a co wymaga weryfikacji
 
-**Wymaga weryfikacji na prawdziwym telefonie i kamerze:**
-- natywna kompilacja (Android SDK/NDK i Xcode nie były dostępne) — pierwsze `npx expo run:android|ios`;
-- działanie potoku kamery na urządzeniu: resizer GPU, `runSync` TFLite w workletcie, fps;
-  cel: ≥ 15 fps (czas „inferencja+crop” widać w trybie debug; próbkowanie cropa w JS to ~4 ms/klatkę bez JIT na serwerze, na telefonie może być wolniej);
-- poprawność nakładki szkieletu względem podglądu (konwersja Frame → Camera → View, w tym lustrzane odbicie przedniej kamery i orientacja pozioma);
-- **podciągnięcia na prawdziwym ruchu** (zweryfikowane tylko syntetycznie);
-- pompki w innych wariantach niż na nagraniu (klasyczne z podłogi, inna odległość/oświetlenie), przysiady dokładnie z boku i przodem;
-- odczyt głosowy (`pl-PL` musi być dostępny w syntezatorze systemu);
-- ewentualne dostrojenie progów w `config.ts` na podstawie trybu debug.
+**Sprawdzone bez telefonu:** cała logika analizy (156 testów), ewaluacja na 2 prawdziwych nagraniach (pompki,
+przysiady; MoveNet i MediaPipe), typecheck, lint, bundle JS iOS/Android, podgląd interfejsu w przeglądarce
+z syntetycznym strumieniem.
 
-### Scenariusze ręcznego sprawdzenia (każdy dla pompek, przysiadów i podciągnięć)
+**Wymaga sprawdzenia na telefonie i kamerze:**
+- wszystkie ćwiczenia na prawdziwym ruchu – szczególnie **deska, wyciskanie, podciąganie, brzuszki i skakanka**
+  (sprawdzone tylko syntetycznie),
+- odróżnianie wspięcia na palce od skoku (zależy od tego, czy MediaPipe pewnie widzi palce stóp),
+- wariant na kolanach, zdejmowanie sztangi, kołysanie w widoku z boku,
+- płynność (fps) w Expo Go i w buildzie natywnym.
 
-Ustaw telefon zgodnie z instrukcją na ekranie, włącz „Debug”.
+### Scenariusze na telefonie
+Ustaw telefon zgodnie z instrukcją, włącz tryb debugowania (pokazuje stan, fazę, wartość, progi, stronę, jakość,
+pokrycie i historię cykli z powodami).
 
-| # | Scenariusz | Oczekiwany wynik |
+| # | Scenariusz | Oczekiwane |
 |---|---|---|
-| 1 | Kalibracja: stań/podeprzyj się/zawiśnij w pozycji startowej | ✓ przy wszystkich częściach ciała, „Kalibracja OK (kąt …°)”, Start aktywny |
-| 2 | 5 pełnych powtórzeń w normalnym tempie | licznik 5, każde zdarzenie „ZALICZONE” w debug |
-| 3 | 3 pełne + 3 płytkie (do połowy zakresu) | licznik 3, w debug 3× „niepełne (za płytko)” |
-| 4 | 15 s bez ruchu w pozycji startowej, potem lekkie kołysanie | licznik bez zmian |
-| 5 | Szybkie powtórzenia (ok. 1 s) i bardzo wolne (4–5 s) | każde policzone dokładnie raz |
-| 6 | W trakcie powtórzenia wyjdź z kadru, wróć w pozycji startowej | „Ustaw się w kadrze”, to powtórzenie nie jest liczone, następne pełne już tak |
-| 7 | Wyjdź z kadru w pozycji startowej i wróć kilka razy | licznik bez zmian |
-| 8 | Pauza w połowie ruchu → Wznów | brak dodatkowego powtórzenia; liczenie od nowej pozycji startowej |
-| 9 | Przełącz kamerę przód/tył | podgląd się zmienia, szkielet pokrywa się z sylwetką (także lustrzanie na przedniej) |
-| 10 | Telefon poziomo (pompki) | interfejs i szkielet obracają się poprawnie, liczenie działa |
-| 11 | Wyjdź do ekranu głównego telefonu w trakcie treningu | trening się pauzuje, kamera wyłącza się |
-| 12 | Odmów uprawnienia kamery, potem nadaj je w ustawieniach | komunikat + przycisk ustawień; po nadaniu podgląd działa |
-| 13 | Zakończ | podsumowanie: ćwiczenie, liczba powtórzeń, czas bez pauz |
-| 14 | Pompki: zginaj ręce stojąc (bez podporu) | brak liczenia (bramka postawy) |
-| 15 | Podciągnięcia: puść drążek w połowie ruchu | reset, powtórzenie nie jest liczone |
+| 1 | Kalibracja, potem 2 spokojne płytkie ruchy | „Zmierzony zakres” w panelu; cel się nie zmienia |
+| 2 | 5 pełnych powtórzeń | 5 cykli z osiągniętym celem |
+| 3 | 3 pełne + 3 płytkie | 6 cykli: 3 z celem, 3 „cel nieosiągnięty” |
+| 4 | Stanie bez ruchu 20 s | 0 cykli |
+| 5 | Płynne powtórzenia bez zatrzymania na dole | wszystkie liczone |
+| 6 | Zatrzymanie w połowie ruchu i powrót | 1 cykl „cel nieosiągnięty” |
+| 7 | Wyjście z kadru w dolnej fazie | „Ustaw się w kadrze”, próba nieocenialna, potem ponowne ustawienie |
+| 8 | Zasłonięcie jednej strony (podciąganie przodem) | liczy, cykle oznaczone jako jednostronne |
+| 9 | Pompka na kolanach przy wariancie „Klasyczna” | wskazówka o wariancie, brak „celu osiągniętego” |
+| 10 | Wyciskanie: zdjęcie sztangi, 3 powtórzenia, odłożenie | 3 cykle; zdjęcie i odłożenie nieliczone |
+| 11 | Brzuszki: same ruchy głową | 0 cykli |
+| 12 | Deska z opadającymi biodrami | wskazówka „Biodra opadają”, czas w tolerancji stoi |
+| 13 | Skakanka: wspięcia na palce, potem podskoki | wspięcia nieliczone (z widocznymi palcami), podskoki liczone |
+| 14 | Pauza w połowie ruchu → Wznów | brak dodatkowego cyklu |
 
 ---
 
 ## 8. Struktura
 
 ```
-src/app/                  ekrany (Expo Router): index (wybór), workout (trening), summary
-src/hooks/usePoseDetection.ts   potok kamera → resizer → crop → MoveNet (worklet)
-src/pose/                 dekodowanie MoveNet, smart crop, typy punktów
-src/counting/             config (progi), features, filters (One Euro), calibration, repCounter
-src/components/           nakładka szkieletu, panel debug
-src/testing/              generator syntetycznych sekwencji pozy, helpery testów
-__tests__/                testy jednostkowe i odtwarzanie prawdziwych nagrań
-scripts/verify/           weryfikacja modelu na nagraniach (Python, LiteRT)
-scripts/verify-model.sh   porównanie modelu z oficjalnym wydaniem
+src/analysis/   config (progi, wersja), exercises (opisy, ustawienie), geometry, landmarks (punkty, strona),
+                metrics, filters, calibration, detectors/{cyclic,plank,jump}, hints, session (wyniki)
+src/evaluation/ ewaluacja na opisanych nagraniach
+src/pose/       adaptery modeli (MoveNet, MediaPipe), crop, typy punktów
+src/camera/     silniki kamery: natywny (VisionCamera + TFLite) i WebView (Expo Go)
+src/app/        ekrany (Expo Router); src/components/ panel debugowania, szkielet
+src/testing/    generator syntetycznych sekwencji, runner analizy
+scripts/        weryfikacja modelu, ekstrakcja landmarków z nagrań, manifest ewaluacji
 ```
 
 ## 9. Ograniczenia
-- Analiza 2D z jednej kamery: kąty zależą od ustawienia telefonu — stąd instrukcje ustawienia i kalibracja.
-- Jedna osoba w kadrze (MoveNet SinglePose).
-- Podciągnięcia: brak wykrywania drążka i pozycji brody.
-- Wymagany GPU z Vulkanem na Androidzie (resizer); przy jego braku aplikacja pokazuje komunikat.
-- Czas klatek mierzony `Date.now()` w workletcie (czas przetworzenia, nie naświetlenia — różnica jest stała i nie wpływa na liczenie).
+- Analiza 2D z jednej kamery; kąty zależą od ustawienia telefonu. Nie są oceniane: koślawienie kolan,
+  symetria, rozstaw chwytu/dłoni i inne kryteria, których dany widok nie pokazuje („Nie można ocenić z tego ustawienia”).
+- Brak modeli sztangi, drążka, linki i brody: kontakt sztangi z klatką, tor i prędkość sztangi, broda nad drążkiem,
+  obroty skakanki i double unders są **niedostępne**, a nie symulowane.
+- Jedna osoba w kadrze. Progi wymagają strojenia na większej liczbie nagrań.
+- MoveNet (build natywny) ma większy szum niż MediaPipe – przy skakance wymaga wyższych skoków, przy niskim fps
+  częściej oznacza próby jako nieocenialne.

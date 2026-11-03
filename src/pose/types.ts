@@ -78,9 +78,26 @@ export interface Pose {
   keypoints: number[];
   width: number;
   height: number;
-  /** Milliseconds, monotonic within a session. */
+  /** Milliseconds, monotonic within a session (real frame/processing time, not a frame count). */
   timestamp: number;
+  /**
+   * Which model produced the pose. Scores are NOT comparable between models
+   * (MoveNet "score" vs MediaPipe "visibility"), so visibility thresholds are
+   * configured per source. Default: 'movenet'.
+   */
+  source?: PoseSource;
+  /**
+   * Foot landmarks available only from MediaPipe (MoveNet has none):
+   * flat [x, y, score] * 4 in FOOT_LANDMARKS order, normalized like `keypoints`.
+   */
+  feet?: number[];
 }
+
+export type PoseSource = 'movenet' | 'mediapipe';
+
+/** Order of `Pose.feet`. */
+export const FOOT_LANDMARKS = ['left_heel', 'right_heel', 'left_toe', 'right_toe'] as const;
+export const FOOT = { leftHeel: 0, rightHeel: 1, leftToe: 2, rightToe: 3 } as const;
 
 export interface Point {
   x: number;

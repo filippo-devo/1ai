@@ -1,56 +1,29 @@
-import type { ExerciseId, ExerciseThresholds, PlankConfig, RepExerciseId, TrackingConfig } from '../counting/config';
-import { Calibrator } from '../counting/calibration';
-import { extractFeatures } from '../counting/features';
-import { RepCounter, type Calibration, type CounterSnapshot, type RepEvent } from '../counting/repCounter';
-import { PlankTimer, type PlankSnapshot } from '../counting/plankTimer';
+import { CalibrationCollector, type CalibrationResult, type MeasuredRange } from '../analysis/calibration';
+import type { ExerciseId, VariantId } from '../analysis/config';
+import { ExerciseAnalyzer, type AnalysisSnapshot, type SessionResult } from '../analysis/session';
 import type { Pose } from '../pose/types';
 
-export interface RunResult {
-  reps: number;
-  partials: number;
-  events: RepEvent[];
-  snapshots: CounterSnapshot[];
-  /** Number of frames processed while tracking was 'lost'. */
-  lostFrames: number;
+export interface AnalyzeRun {
+  snaps: AnalysisSnapshot[];
+  result: SessionResult;
+  analyzer: ExerciseAnalyzer;
 }
 
-export function runCounter(
-  exercise: RepExerciseId,
+/** Runs the full analysis pipeline on a recorded/synthetic pose sequence (no camera). */
+export function analyze(
+  exercise: ExerciseId,
+  variant: VariantId,
   poses: Pose[],
-  options: {
-    calibration?: Calibration | null;
-    thresholds?: Partial<ExerciseThresholds>;
-    tracking?: Partial<TrackingConfig>;
-  } = {},
-): RunResult {
-  const counter = new RepCounter(exercise, options);
-  const events: RepEvent[] = [];
-  counter.onEvent((e) => events.push(e));
-  const snapshots: CounterSnapshot[] = [];
-  let lostFrames = 0;
-  for (const p of poses) {
-    const s = counter.update(extractFeatures(exercise, p), p.timestamp);
-    if (s.tracking === 'lost') lostFrames++;
-    snapshots.push(s);
-  }
-  const last = snapshots[snapshots.length - 1];
-  return { reps: last?.reps ?? 0, partials: last?.partials ?? 0, events, snapshots, lostFrames };
+  options: { calibration?: CalibrationResult | null; target?: number | null; measuredRange?: MeasuredRange | null } = {},
+): AnalyzeRun {
+  const analyzer = new ExerciseAnalyzer(exercise, variant, { ...options, source: poses[0]?.source });
+  const snaps = poses.map((p) => analyzer.update(p));
+  return { snaps, result: analyzer.result(), analyzer };
 }
 
-export function runCalibration(exercise: ExerciseId, poses: Pose[]): Calibration | null {
-  const c = new Calibrator(exercise);
-  for (const p of poses) {
-    const s = c.update(extractFeatures(exercise, p), p.timestamp);
-    if (s.result) return s.result;
-  }
-  return null;
-}
-
-export function runPlank(
-  poses: Pose[],
-  options: { calibration?: Calibration | null; config?: Partial<PlankConfig> } = {},
-): { snapshots: PlankSnapshot[]; last: PlankSnapshot } {
-  const timer = new PlankTimer(options);
-  const snapshots = poses.map((p) => timer.update(extractFeatures('plank', p), p.timestamp));
-  return { snapshots, last: snapshots[snapshots.length - 1] };
+export function calibrate(exercise: ExerciseId, variant: VariantId, poses: Pose[]): { result: CalibrationResult | null; range: MeasuredRange | null } {
+  const c = new CalibrationCollector(exercise, variant);
+  let last = null as ReturnType<CalibrationCollector['update']> | null;
+  for (const p of poses) last = c.update(p);
+  return { result: last?.result ?? null, range: last?.measuredRange ?? null };
 }

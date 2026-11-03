@@ -160,3 +160,14 @@ describe('MediaPipe (Expo Go engine) -> COCO keypoints', () => {
     expect(p).toMatchObject({ width: 640, height: 480, timestamp: 10 });
   });
 });
+
+describe('MediaPipe foot landmarks (heels, toes)', () => {
+  test('are passed to Pose.feet in [left_heel, right_heel, left_toe, right_toe] order; MoveNet poses have none', () => {
+    const lm = new Array(33 * 3).fill(0).map((_, i) => (i % 3 === 2 ? 0.9 : i / 1000));
+    const p = webMessageToPose({ t: 0, w: 640, h: 480, lm });
+    expect(p.source).toBe('mediapipe');
+    expect(p.feet).toHaveLength(12);
+    expect(p.feet![0]).toBeCloseTo((29 * 3) / 1000);
+    expect(p.feet![9]).toBeCloseTo((32 * 3) / 1000);
+  });
+});

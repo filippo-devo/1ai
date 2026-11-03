@@ -1,0 +1,61 @@
+{
+  "toleranceMs": 700,
+  "recordings": [
+    {
+      "id": "pushups-demo-movenet",
+      "file": "real/pushups.json",
+      "format": "movenet-square",
+      "exercise": "pushup",
+      "variant": "standard",
+      "split": "test",
+      "labelsMs": [2133, 4133, 6267, 8267],
+      "notes": "Ultralytics demo video, side view, feet on a ball; labels = frame of return to the top (64, 124, 188, 248 @ 30 fps)."
+    },
+    {
+      "id": "pushups-demo-movenet-10fps",
+      "file": "real/pushups_every3.json",
+      "format": "movenet-square",
+      "exercise": "pushup",
+      "variant": "standard",
+      "split": "test",
+      "labelsMs": [2133, 4133, 6267, 8267]
+    },
+    {
+      "id": "pushups-demo-mediapipe",
+      "file": "real/mp_pushups_full.json",
+      "format": "mediapipe-messages",
+      "exercise": "pushup",
+      "variant": "standard",
+      "split": "test",
+      "labelsMs": [2133, 4133, 6267, 8267]
+    },
+    {
+      "id": "squats-demo-movenet",
+      "file": "real/squats.json",
+      "format": "movenet-square",
+      "exercise": "squat",
+      "variant": "standard",
+      "split": "test",
+      "labelsMs": [2133, 3867, 5600, 7200],
+      "notes": "Ultralytics demo video, ~45° view; labels = frame of return to standing (64, 116, 168, 216 @ 30 fps)."
+    },
+    {
+      "id": "squats-demo-movenet-10fps",
+      "file": "real/squats_every3.json",
+      "format": "movenet-square",
+      "exercise": "squat",
+      "variant": "standard",
+      "split": "test",
+      "labelsMs": [2133, 3867, 5600, 7200]
+    },
+    {
+      "id": "squats-demo-mediapipe",
+      "file": "real/mp_squats_full.json",
+      "format": "mediapipe-messages",
+      "exercise": "squat",
+      "variant": "standard",
+      "split": "test",
+      "labelsMs": [2133, 3867, 5600, 7200]
+    }
+  ]
+}

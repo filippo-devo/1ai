@@ -5,22 +5,15 @@ import * as Speech from 'expo-speech';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { CalibrationCollector, type CalibrationState } from '../analysis/calibration';
+import { CYCLIC, EXERCISE_IDS, type ExerciseId, type VariantId } from '../analysis/config';
+import { DEFAULT_VARIANT, EXERCISES } from '../analysis/exercises';
+import { cocoIndices, FrameView, PART_PL, type Part } from '../analysis/landmarks';
+import { ExerciseAnalyzer, setLastResult, type AnalysisSnapshot } from '../analysis/session';
+import type { CycleRecord } from '../analysis/types';
 import { PoseCamera, POSE_ENGINE } from '../camera/PoseCamera';
 import type { DetectedPose } from '../camera/types';
 import { DebugPanel } from '../components/DebugPanel';
-import { Calibrator, type CalibrationState } from '../counting/calibration';
-import { EXERCISES, EXERCISE_IDS, isRepExercise, JUMP_MOVENET, type ExerciseId } from '../counting/config';
-import {
-  BODY_PART_PL,
-  extractFeatures,
-  requiredKeypointIndices,
-  visibleParts,
-  type BodyPart,
-  type Features,
-} from '../counting/features';
-import { JumpCounter } from '../counting/jumpCounter';
-import { PlankTimer, type PlankSnapshot } from '../counting/plankTimer';
-import { RepCounter, type Calibration, type CounterSnapshot, type Phase, type RepEvent } from '../counting/repCounter';
 import { colors, exerciseTint, radius, withAlpha } from '../ui/theme';
 import { formatDuration } from '../utils/format';
 
@@ -44,7 +37,7 @@ function say(text: string, enabled: boolean) {
   Speech.speak(text, { language: 'pl-PL', rate: 1.1 });
 }
 
-/** Spoken plank time: "10 sekund", "1 minuta", "1 minuta 20". */
+/** Spoken time: "10 sekund", "1 minuta", "1 minuta 20". */
 function spokenTime(totalS: number): string {
   const m = Math.floor(totalS / 60);
   const s = totalS % 60;
@@ -53,17 +46,20 @@ function spokenTime(totalS: number): string {
   return s === 0 ? `${m} ${min}` : `${m} ${min} ${s}`;
 }
 
+const cyclicConfig = (exercise: ExerciseId, variant: VariantId) => CYCLIC[`${exercise}/${variant}`] ?? null;
+
 export default function WorkoutScreen() {
   useKeepAwake();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ exercise: string; voice?: string; debug?: string }>();
   const exercise: ExerciseId = (EXERCISE_IDS as string[]).includes(params.exercise)
     ? (params.exercise as ExerciseId)
-    : 'pushup';
+    : 'squat';
   const info = EXERCISES[exercise];
   const tint = exerciseTint[exercise];
   const voice = params.voice !== '0';
   const [debug, setDebug] = useState(params.debug === '1');
+  const source = POSE_ENGINE === 'native' ? 'movenet' : 'mediapipe';
 
   // --- camera lifecycle ------------------------------------------------------------------
   const [position, setPosition] = useState<'back' | 'front'>('back');
@@ -71,6 +67,13 @@ export default function WorkoutScreen() {
   const appActive = useAppStateActive();
   // Processing stops when the screen is not focused / app in background (camera inactive).
   const isActive = isFocused && appActive;
+
+  // --- exercise setup ----------------------------------------------------------------------
+  const [variant, setVariant] = useState<VariantId>(DEFAULT_VARIANT[exercise]);
+  const [target, setTarget] = useState<number | null>(cyclicConfig(exercise, DEFAULT_VARIANT[exercise])?.target ?? null);
+  const [calibrator, setCalibrator] = useState(() => new CalibrationCollector(exercise, DEFAULT_VARIANT[exercise]));
+  const [calibration, setCalibration] = useState<CalibrationState | null>(null);
+  const [parts, setParts] = useState<{ part: Part; visible: boolean }[] | null>(null);
 
   // --- workout state ---------------------------------------------------------------------
   const [stage, setStage] = useState<Stage>('setup');
@@ -80,23 +83,24 @@ export default function WorkoutScreen() {
     stageRef.current = next;
     setStage(next);
   }, []);
-  const [calibrator] = useState(() => new Calibrator(exercise));
-  const [calibration, setCalibration] = useState<CalibrationState | null>(null);
-  const calibrationResultRef = useRef<Calibration | null>(null);
-  const counterRef = useRef<RepCounter | JumpCounter | null>(null);
-  const plankRef = useRef<PlankTimer | null>(null);
+  const analyzerRef = useRef<ExerciseAnalyzer | null>(null);
   const announcedRef = useRef(0);
-  const [snapshot, setSnapshot] = useState<CounterSnapshot | null>(null);
-  const [plank, setPlank] = useState<PlankSnapshot | null>(null);
-  const [features, setFeatures] = useState<Features | null>(null);
+  const [snapshot, setSnapshot] = useState<AnalysisSnapshot | null>(null);
   const [lastPose, setLastPose] = useState<DetectedPose | null>(null);
   const [perf, setPerf] = useState({ fps: 0, inferenceMs: 0 });
-  const [events, setEvents] = useState<RepEvent[]>([]);
+  const [cycles, setCycles] = useState<CycleRecord[]>([]);
   const [countdown, setCountdown] = useState(COUNTDOWN_S);
   const [elapsedMs, setElapsedMs] = useState(0);
   const accumulatedMsRef = useRef(0);
   const activeSinceRef = useRef<number | null>(null);
   const fpsRef = useRef({ lastT: 0, fps: 0 });
+
+  const chooseVariant = (v: VariantId) => {
+    setVariant(v);
+    setTarget(cyclicConfig(exercise, v)?.target ?? null);
+    setCalibrator(new CalibrationCollector(exercise, v));
+    setCalibration(null);
+  };
 
   // --- pose handling (JS thread) ---------------------------------------------------------
   const onPose = useCallback(
@@ -108,23 +112,23 @@ export default function WorkoutScreen() {
       }
       s.lastT = pose.timestamp;
 
-      const f = extractFeatures(exercise, pose);
       const st = stageRef.current;
       if (st === 'setup') {
-        setCalibration(calibrator.update(f, pose.timestamp));
-      } else if (st === 'active') {
-        if (counterRef.current) setSnapshot(counterRef.current.update(f, pose.timestamp));
-        if (plankRef.current) {
-          const p = plankRef.current.update(f, pose.timestamp);
-          setPlank(p);
-          const tens = Math.floor(p.heldMs / 10000);
+        setCalibration(calibrator.update(pose));
+        const view = new FrameView(pose);
+        const needed: Part[] = [...new Set<Part>([...EXERCISE_PARTS[exercise], ...(view.provides('toe') && exercise === 'jumprope' ? (['toe'] as Part[]) : [])])];
+        setParts(needed.map((part) => ({ part, visible: !!(view.get(part, 'left') || view.get(part, 'right')) })));
+      } else if (st === 'active' && analyzerRef.current) {
+        const snap = analyzerRef.current.update(pose);
+        setSnapshot(snap);
+        if (snap.plank) {
+          const tens = Math.floor(snap.plank.stats.inToleranceMs / 10000);
           if (tens > announcedRef.current) {
             announcedRef.current = tens;
             say(spokenTime(tens * 10), voice);
           }
         }
       }
-      setFeatures(f);
       setLastPose(pose);
       if (debug) setPerf({ fps: s.fps, inferenceMs: pose.inferenceMs });
     },
@@ -141,10 +145,27 @@ export default function WorkoutScreen() {
     return () => clearInterval(id);
   }, [stage]);
 
-  // --- countdown -> start counting -------------------------------------------------------
+  // --- countdown -> start ------------------------------------------------------------------
   const startCountdown = () => {
-    // The calibration result is frozen when Start is pressed.
-    calibrationResultRef.current = calibration?.result ?? null;
+    // Calibration, measured range and target are frozen when Start is pressed.
+    const analyzer = new ExerciseAnalyzer(exercise, variant, {
+      calibration: calibration?.result ?? null,
+      measuredRange: calibration?.measuredRange ?? null,
+      target,
+      source,
+    });
+    analyzer.cyclic?.onEvent((e) => {
+      if (e.type !== 'cycle') return;
+      setCycles((prev) => [...prev.slice(-19), e.cycle]);
+      if (e.cycle.outcome === 'target_reached') say(String(analyzer.cyclic?.snapshot().counts.targetReached ?? ''), voice);
+    });
+    analyzer.jump?.onJump((j) => {
+      if (j.index % 10 === 0) say(String(j.index), voice);
+    });
+    analyzerRef.current = analyzer;
+    announcedRef.current = 0;
+    setSnapshot(null);
+    setCycles([]);
     setCountdown(COUNTDOWN_S);
     say(String(COUNTDOWN_S), voice);
     goTo('countdown');
@@ -161,31 +182,12 @@ export default function WorkoutScreen() {
         return;
       }
       clearInterval(id);
-      if (isRepExercise(exercise) || exercise === 'jumprope') {
-        const counter =
-          exercise === 'jumprope'
-            ? new JumpCounter({ config: POSE_ENGINE === 'native' ? JUMP_MOVENET : undefined })
-            : new RepCounter(exercise, { calibration: calibrationResultRef.current });
-        // Jump rope is fast: announce every 10th jump instead of every jump.
-        const announceEvery = exercise === 'jumprope' ? 10 : 1;
-        counter.onEvent((e) => {
-          setEvents((prev) => [...prev.slice(-19), e]);
-          if (e.type === 'rep' && e.reps % announceEvery === 0) say(String(e.reps), voice);
-        });
-        counterRef.current = counter;
-        setSnapshot(counter.snapshot());
-      } else {
-        const timer = new PlankTimer({ calibration: calibrationResultRef.current });
-        plankRef.current = timer;
-        announcedRef.current = 0;
-        setPlank(timer.snapshot());
-      }
       activeSinceRef.current = Date.now();
       say('Start', voice);
       goTo('active');
     }, 1000);
     return () => clearInterval(id);
-  }, [stage, exercise, voice, goTo]);
+  }, [stage, voice, goTo]);
 
   const pause = useCallback(() => {
     if (stageRef.current !== 'active') return;
@@ -197,9 +199,8 @@ export default function WorkoutScreen() {
   }, [goTo]);
 
   const resume = useCallback(() => {
-    // After a pause the start position must be re-established: resuming never adds a rep.
-    counterRef.current?.resetPhase();
-    plankRef.current?.resetPhase();
+    // After a pause the start position must be re-established: resuming never adds a repetition.
+    analyzerRef.current?.resync();
     activeSinceRef.current = Date.now();
     goTo('active');
   }, [goTo]);
@@ -209,20 +210,9 @@ export default function WorkoutScreen() {
     if (since !== null) accumulatedMsRef.current += Date.now() - since;
     activeSinceRef.current = null;
     void Speech.stop();
-    const snap = counterRef.current?.snapshot();
-    const hold = plankRef.current?.snapshot();
-    router.replace({
-      pathname: '/summary',
-      params: {
-        exercise,
-        reps: String(snap?.reps ?? 0),
-        partials: String(snap?.partials ?? 0),
-        heldMs: String(Math.round(hold?.heldMs ?? 0)),
-        bestMs: String(Math.round(hold?.bestMs ?? 0)),
-        durationMs: String(Math.round(accumulatedMsRef.current)),
-      },
-    });
-  }, [exercise]);
+    if (analyzerRef.current) setLastResult(analyzerRef.current.result());
+    router.replace({ pathname: '/summary', params: { durationMs: String(Math.round(accumulatedMsRef.current)) } });
+  }, []);
 
   // Auto-pause when the app goes to background (the camera stops, so counting must too).
   useEffect(() => {
@@ -245,8 +235,7 @@ export default function WorkoutScreen() {
       calibrator.reset();
       setCalibration(null);
     } else {
-      counterRef.current?.resetPhase();
-      plankRef.current?.resetPhase();
+      analyzerRef.current?.resync();
     }
   }, [calibrator]);
 
@@ -255,7 +244,7 @@ export default function WorkoutScreen() {
     setCalibration(null);
   };
 
-  const highlight = useMemo(() => requiredKeypointIndices(exercise), [exercise]);
+  const highlight = useMemo(() => cocoIndices(EXERCISE_PARTS[exercise]), [exercise]);
   const counting = stage === 'active' || stage === 'paused';
 
   return (
@@ -272,13 +261,12 @@ export default function WorkoutScreen() {
 
         {debug && (
           <DebugPanel
-            exercise={exercise}
-            features={features}
             snapshot={snapshot}
+            calibration={calibration}
             fps={perf.fps}
             inferenceMs={perf.inferenceMs}
             cropSize={lastPose?.cropSize ?? Number.NaN}
-            events={events}
+            cycles={cycles}
             engine={POSE_ENGINE === 'native' ? 'MoveNet (natywnie)' : 'MediaPipe (WebView, Expo Go)'}
             top={insets.top + 64}
           />
@@ -290,7 +278,7 @@ export default function WorkoutScreen() {
               <Text style={styles.countdown}>{countdown}</Text>
             </View>
             <View style={styles.pill}>
-              <Text style={styles.pillText}>Przyjmij pozycję: {info.startLabel}</Text>
+              <Text style={styles.pillText}>Przyjmij pozycję: {info.restLabel}</Text>
             </View>
           </View>
         )}
@@ -299,8 +287,6 @@ export default function WorkoutScreen() {
           <CountingOverlay
             exercise={exercise}
             snapshot={snapshot}
-            plank={plank}
-            features={features}
             paused={stage === 'paused'}
             elapsedMs={elapsedMs}
             bottomInset={insets.bottom}
@@ -315,7 +301,10 @@ export default function WorkoutScreen() {
           <RoundButton icon="close" label="Zamknij" onPress={() => router.back()} />
           <View style={styles.titlePill}>
             <MaterialCommunityIcons name={info.icon as IconName} size={18} color={tint} />
-            <Text style={styles.titleText}>{info.name}</Text>
+            <Text style={styles.titleText}>
+              {info.name}
+              {info.variants.length > 1 ? ` · ${info.variants.find((v) => v.id === variant)?.label}` : ''}
+            </Text>
           </View>
           <View style={styles.topRight}>
             <RoundButton icon="camera-flip-outline" label="Przełącz kamerę" onPress={switchCamera} />
@@ -334,8 +323,12 @@ export default function WorkoutScreen() {
           {stage === 'setup' ? (
             <SetupPanel
               exercise={exercise}
+              variant={variant}
+              onVariant={chooseVariant}
+              target={target}
+              onTarget={setTarget}
               calibration={calibration}
-              parts={lastPose ? visibleParts(exercise, lastPose) : null}
+              parts={parts}
               onStart={startCountdown}
               onRecalibrate={recalibrate}
             />
@@ -349,6 +342,17 @@ export default function WorkoutScreen() {
     </View>
   );
 }
+
+/** Parts shown in the setup visibility checklist / highlighted in the overlay. */
+const EXERCISE_PARTS: Record<ExerciseId, Part[]> = {
+  squat: ['shoulder', 'hip', 'knee', 'ankle'],
+  plank: ['shoulder', 'elbow', 'wrist', 'hip', 'knee', 'ankle'],
+  pushup: ['shoulder', 'elbow', 'wrist', 'hip'],
+  bench: ['shoulder', 'elbow', 'wrist', 'hip'],
+  pullup: ['shoulder', 'elbow', 'wrist'],
+  abs: ['shoulder', 'hip', 'knee', 'ankle'],
+  jumprope: ['hip', 'knee', 'ankle'],
+};
 
 function RoundButton({
   icon,
@@ -381,32 +385,23 @@ function RoundButton({
   );
 }
 
-function phaseText(phase: Phase, exercise: ExerciseId): string {
+function statusOf(exercise: ExerciseId, snap: AnalysisSnapshot | null, paused: boolean): { text: string; tone: 'normal' | 'alert' | 'good' } {
   const info = EXERCISES[exercise];
-  switch (phase) {
-    case 'unknown':
-      return `Przyjmij pozycję: ${info.startLabel}`;
-    case 'start':
-      return info.startLabel;
-    case 'down':
-      return `→ ${info.targetLabel}`;
-    case 'target':
-      return info.targetLabel;
-    case 'up':
-      return `→ ${info.startLabel}`;
-  }
-}
-
-function lostMessage(features: Features | null): string {
-  const missing = features && !features.valid ? features.missing.map((m) => BODY_PART_PL[m]).join(', ') : '';
-  return `Ustaw się w kadrze${missing ? ` · nie widać: ${missing}` : ''}`;
+  if (paused) return { text: 'Pauza', tone: 'normal' };
+  if (!snap) return { text: `Przyjmij pozycję: ${info.restLabel}`, tone: 'normal' };
+  // One hint at a time; camera/visibility problems first.
+  if (snap.hint) return { text: snap.hint.text, tone: snap.hint.kind === 'setup' ? 'alert' : 'normal' };
+  if (snap.state === 'TRACKING_LOST') return { text: 'Ustaw się w kadrze', tone: 'alert' };
+  if (snap.plank) return snap.plank.inTolerance ? { text: 'Trzymaj!', tone: 'good' } : { text: info.postureHint, tone: 'normal' };
+  if (snap.jump) return snap.jump.state === 'NOT_READY' ? { text: 'Stań prosto…', tone: 'normal' } : { text: 'Skacz!', tone: 'good' };
+  if (snap.state === 'NOT_READY') return { text: `Przyjmij pozycję: ${info.restLabel}`, tone: 'normal' };
+  if (snap.state === 'READY' || !snap.phase) return { text: info.restLabel, tone: 'normal' };
+  return { text: info.phaseLabels[snap.phase], tone: 'normal' };
 }
 
 function CountingOverlay({
   exercise,
   snapshot,
-  plank,
-  features,
   paused,
   elapsedMs,
   bottomInset,
@@ -415,9 +410,7 @@ function CountingOverlay({
   onFinish,
 }: {
   exercise: ExerciseId;
-  snapshot: CounterSnapshot | null;
-  plank: PlankSnapshot | null;
-  features: Features | null;
+  snapshot: AnalysisSnapshot | null;
   paused: boolean;
   elapsedMs: number;
   bottomInset: number;
@@ -426,29 +419,22 @@ function CountingOverlay({
   onFinish: () => void;
 }) {
   const info = EXERCISES[exercise];
-  const isHold = info.kind === 'hold';
-  const tracking = isHold ? plank?.tracking : snapshot?.tracking;
-
-  let message: string;
-  let tone: 'normal' | 'alert' | 'good' = 'normal';
-  if (paused) message = 'Pauza';
-  else if (!tracking || tracking === 'lost') {
-    tone = 'alert';
-    message = lostMessage(features);
-  } else if (tracking === 'uncertain') message = 'Słaba widoczność…';
-  else if (isHold) {
-    if (plank?.inPosition) {
-      tone = 'good';
-      message = 'Trzymaj!';
-    } else message = plank?.postureOk ? 'Wyprostuj ciało w jednej linii' : info.postureHint;
-  } else if (snapshot && snapshot.phase === 'unknown' && !snapshot.postureOk) message = info.postureHint;
-  else if (exercise === 'jumprope') {
-    message = snapshot && snapshot.phase !== 'unknown' ? 'Skacz!' : 'Stań prosto…';
-    if (snapshot?.phase !== 'unknown') tone = 'good';
-  } else message = snapshot ? phaseText(snapshot.phase, exercise) : '';
-
-  const big = isHold ? formatDuration(plank?.heldMs ?? 0) : String(snapshot?.reps ?? 0);
-  const caption = isHold ? 'czas w desce' : exercise === 'jumprope' ? 'skoki' : 'powtórzenia';
+  const { text: message, tone } = statusOf(exercise, snapshot, paused);
+  const isTime = info.kind === 'hold';
+  const value = snapshot?.main.value ?? 0;
+  const big = isTime ? formatDuration(value) : String(value);
+  const caption = info.kind === 'hold' ? 'w tolerancji' : info.kind === 'jumps' ? 'podskoki' : 'z osiągniętym celem';
+  let secondary = '';
+  if (snapshot?.counts) {
+    const c = snapshot.counts;
+    secondary = `cykle ${c.detected} · cel nieosiągnięty ${c.targetMissed} · nieocenialne ${c.unevaluable}`;
+  } else if (snapshot?.plank) {
+    const p = snapshot.plank.stats;
+    secondary = `w pozycji ${formatDuration(p.positionMs)} · nieocenialne ${formatDuration(p.unevaluableMs)}`;
+  } else if (snapshot?.jump) {
+    const j = snapshot.jump.stats;
+    secondary = j.perMinute ? `rytm ${Math.round(j.perMinute)}/min · przerwy ${j.pauses}` : '';
+  }
 
   return (
     <View style={[styles.countingBox, { paddingBottom: bottomInset + 16 }]} pointerEvents="box-none">
@@ -464,10 +450,11 @@ function CountingOverlay({
         </Text>
       </View>
 
-      <Text style={[styles.bigNumber, isHold && styles.bigTime]} accessibilityLabel={`${caption}: ${big}`}>
+      <Text style={[styles.bigNumber, isTime && styles.bigTime]} accessibilityLabel={`${caption}: ${big}`}>
         {big}
       </Text>
       <Text style={styles.caption}>{caption.toUpperCase()}</Text>
+      {secondary ? <Text style={styles.secondary}>{secondary}</Text> : null}
 
       <View style={styles.controls}>
         <View style={styles.timerChip}>
@@ -497,19 +484,28 @@ function CountingOverlay({
 
 function SetupPanel({
   exercise,
+  variant,
+  onVariant,
+  target,
+  onTarget,
   calibration,
   parts,
   onStart,
   onRecalibrate,
 }: {
   exercise: ExerciseId;
+  variant: VariantId;
+  onVariant: (v: VariantId) => void;
+  target: number | null;
+  onTarget: (v: number) => void;
   calibration: CalibrationState | null;
-  parts: { part: BodyPart; visible: boolean }[] | null;
+  parts: { part: Part; visible: boolean }[] | null;
   onStart: () => void;
   onRecalibrate: () => void;
 }) {
   const info = EXERCISES[exercise];
   const tint = exerciseTint[exercise];
+  const cfg = cyclicConfig(exercise, variant);
   const done = calibration?.status === 'done';
   const progress = calibration?.status === 'holding' ? calibration.progress : done ? 1 : 0;
 
@@ -518,7 +514,7 @@ function SetupPanel({
   if (calibration) {
     switch (calibration.status) {
       case 'not_visible':
-        calibText = `Ustaw się w kadrze${calibration.missing.length ? ` · nie widać: ${calibration.missing.map((m) => BODY_PART_PL[m]).join(', ')}` : ''}`;
+        calibText = `Ustaw się w kadrze${calibration.missing.length ? ` · nie widać: ${calibration.missing.map((m) => PART_PL[m]).join(', ')}` : ''}`;
         calibIcon = 'account-search-outline';
         break;
       case 'wrong_posture':
@@ -526,27 +522,56 @@ function SetupPanel({
         calibIcon = 'human';
         break;
       case 'holding':
-        calibText = 'Kalibracja — nie ruszaj się…';
+        calibText = 'Kalibracja — przyjmij pozycję startową i nie ruszaj się…';
         calibIcon = 'progress-clock';
         break;
       case 'done':
-        calibText = 'Gotowe! Możesz zaczynać.';
+        calibText = cfg ? 'Gotowe! Opcjonalnie zrób 2–3 spokojne ruchy, by zmierzyć zakres.' : 'Gotowe! Możesz zaczynać.';
         calibIcon = 'check-circle';
         break;
     }
   }
+  const range = calibration?.measuredRange;
 
   const steps: { icon: IconName; text: string }[] = [
-    { icon: 'cellphone', text: info.setup.phoneOrientation },
+    { icon: 'camera-outline', text: info.setup.view },
+    { icon: 'cellphone', text: info.setup.phone },
     { icon: 'ruler', text: info.setup.distance },
-    { icon: 'camera-outline', text: info.setup.angle },
-    { icon: 'human', text: info.setup.bodyParts },
+    { icon: 'human', text: info.setup.inFrame },
     ...info.setup.tips.map((t) => ({ icon: 'lightbulb-on-outline' as IconName, text: t })),
   ];
+
+  const stepTarget = (dir: 1 | -1) => {
+    if (!cfg || target === null) return;
+    const opts = cfg.targetOptions;
+    const i = opts.indexOf(target);
+    const next = opts[Math.max(0, Math.min(opts.length - 1, (i < 0 ? 0 : i) + dir))];
+    onTarget(next);
+  };
 
   return (
     <View style={styles.setup}>
       <View style={styles.handle} />
+
+      {info.variants.length > 1 && (
+        <View style={styles.segment} accessibilityRole="radiogroup">
+          {info.variants.map((v) => {
+            const on = v.id === variant;
+            return (
+              <Pressable
+                key={v.id}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: on }}
+                onPress={() => onVariant(v.id)}
+                style={[styles.segmentItem, on && { backgroundColor: tint }]}
+              >
+                <Text style={[styles.segmentText, on && { color: colors.onAccent }]}>{v.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+
       <ScrollView style={styles.stepsScroll} contentContainerStyle={styles.steps} showsVerticalScrollIndicator={false}>
         {steps.map((s) => (
           <View key={s.text} style={styles.stepRow}>
@@ -569,9 +594,22 @@ function SetupPanel({
               ]}
             >
               <MaterialCommunityIcons name={visible ? 'check' : 'close'} size={14} color={visible ? colors.ok : colors.danger} />
-              <Text style={[styles.chipText, { color: visible ? colors.ok : colors.danger }]}>{BODY_PART_PL[part]}</Text>
+              <Text style={[styles.chipText, { color: visible ? colors.ok : colors.danger }]}>{PART_PL[part]}</Text>
             </View>
           ))}
+        </View>
+      )}
+
+      {cfg && target !== null && info.targetLabel && (
+        <View style={styles.targetRow}>
+          <MaterialCommunityIcons name="target" size={20} color={tint} />
+          <Text style={styles.targetText}>Cel zakresu: {info.targetLabel(target, variant)}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="Mniejszy zakres" onPress={() => stepTarget(-1)} style={styles.targetBtn}>
+            <MaterialCommunityIcons name="minus" size={18} color={colors.text} />
+          </Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Większy zakres" onPress={() => stepTarget(1)} style={styles.targetBtn}>
+            <MaterialCommunityIcons name="plus" size={18} color={colors.text} />
+          </Pressable>
         </View>
       )}
 
@@ -582,6 +620,12 @@ function SetupPanel({
           <View style={styles.progressTrack}>
             <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%`, backgroundColor: done ? colors.ok : tint }]} />
           </View>
+          {range && (
+            <Text style={styles.rangeText}>
+              Zmierzony zakres: {Math.round(range.rest)}° → {Math.round(range.extreme)}° ({range.cycles}{' '}
+              {range.cycles === 1 ? 'ruch' : 'ruchy'}) · to pomiar, nie cel
+            </Text>
+          )}
         </View>
         {done && (
           <Pressable accessibilityRole="button" accessibilityLabel="Kalibruj ponownie" onPress={onRecalibrate} hitSlop={8}>
@@ -642,7 +686,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
-    maxHeight: '58%',
+    maxHeight: '68%',
     borderTopWidth: 1,
     borderColor: colors.border,
   },
@@ -720,6 +764,14 @@ const styles = StyleSheet.create({
   bigNumber: { fontSize: 140, lineHeight: 150, fontWeight: '800', color: 'white', fontVariant: ['tabular-nums'], ...textShadow },
   bigTime: { fontSize: 96, lineHeight: 110 },
   caption: { color: colors.text, opacity: 0.85, fontSize: 14, fontWeight: '700', letterSpacing: 2, marginTop: -6, ...textShadow },
+  secondary: { color: colors.text, opacity: 0.8, fontSize: 13, fontWeight: '600', marginTop: 4, ...textShadow },
+  segment: { flexDirection: 'row', backgroundColor: colors.surface2, borderRadius: radius.md, padding: 4, gap: 4 },
+  segmentItem: { flex: 1, height: 40, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' },
+  segmentText: { color: colors.text, fontSize: 15, fontWeight: '700' },
+  targetRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.surface2, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 10 },
+  targetText: { flex: 1, color: colors.text, fontSize: 15, fontWeight: '600' },
+  targetBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  rangeText: { color: colors.muted, fontSize: 12 },
   controls: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 18 },
   timerChip: {
     flexDirection: 'row',

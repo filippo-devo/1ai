@@ -46,7 +46,8 @@
     "test": "jest",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",
-    "verify:videos": "bash scripts/verify/run_real_videos.sh"
+    "verify:videos": "bash scripts/verify/run_real_videos.sh",
+    "evaluate": "jest __tests__/evaluation.test.ts"
   },
   "private": true,
   "jest": {

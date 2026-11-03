@@ -3,7 +3,8 @@ import { router } from 'expo-router';
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { EXERCISE_IDS, EXERCISES, type ExerciseId } from '../counting/config';
+import { EXERCISE_IDS, type ExerciseId } from '../analysis/config';
+import { EXERCISES } from '../analysis/exercises';
 import { colors, exerciseTint, radius, withAlpha } from '../ui/theme';
 
 type IconName = keyof typeof MaterialCommunityIcons.glyphMap;

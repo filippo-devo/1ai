@@ -3,8 +3,8 @@
  * Poses are generated from simple planar kinematics (joint angles -> keypoints)
  * so the joint angle the counter measures is exactly controlled.
  */
-import { KP, NUM_KEYPOINTS, type Point, type Pose } from '../pose/types';
-import type { ExerciseId } from '../counting/config';
+import { FOOT, KP, NUM_KEYPOINTS, type Point, type Pose, type PoseSource } from '../pose/types';
+import type { ExerciseId } from '../analysis/config';
 
 export interface Body {
   /** Pixel lengths of body segments. */
@@ -65,7 +65,8 @@ function joint(from: Point, to: Point, a: number, b: number, bendSign: 1 | -1): 
   return add(from, a, base + bendSign * Math.acos(cosA));
 }
 
-type Skeleton = Partial<Record<keyof typeof KP, Point>>;
+type FootName = keyof typeof FOOT;
+export type Skeleton = Partial<Record<keyof typeof KP | FootName, Point>>;
 
 /** Push-up, side view. Person's head to the right, hands on the floor. */
 export function pushupSkeleton(elbowDeg: number, body: Body, origin: Point): Skeleton {
@@ -310,12 +311,42 @@ function pullupLikeStanding(body: Body, ground: Point): Skeleton {
     leftAnkle: { x: ground.x - half, y: ankleY },
     rightAnkle: { x: ground.x + half, y: ankleY },
   };
+  sk.leftHeel = { x: ground.x - half - 4, y: ankleY + 6 };
+  sk.rightHeel = { x: ground.x + half + 4, y: ankleY + 6 };
+  sk.leftToe = { x: ground.x - half - 12, y: ankleY + 10 };
+  sk.rightToe = { x: ground.x + half + 12, y: ankleY + 10 };
   const nose = sk.nose!;
   sk.leftEye = { x: nose.x - 6, y: nose.y - 5 };
   sk.rightEye = { x: nose.x + 6, y: nose.y - 5 };
   sk.leftEar = { x: nose.x - 14, y: nose.y };
   sk.rightEar = { x: nose.x + 14, y: nose.y };
   return sk;
+}
+
+/** Toe raise: heels and ankles rise by `heightPx`, the toes stay on the ground (not a jump). */
+export function toeRaiseSkeleton(heightPx: number, body: Body, origin: Point): Skeleton {
+  const sk = jumpSkeleton(heightPx, body, origin);
+  sk.leftToe = { x: sk.leftToe!.x, y: sk.leftToe!.y + heightPx };
+  sk.rightToe = { x: sk.rightToe!.x, y: sk.rightToe!.y + heightPx };
+  return sk;
+}
+
+/** Crunch / sit-up: `trunkDeg` = trunk (hip→shoulder) elevation above the floor (0 lying, 90 upright). */
+export function absSkeleton(trunkDeg: number, body: Body, origin: Point): Skeleton {
+  return situpSkeleton(135 - trunkDeg, body, origin);
+}
+
+/** Knee push-up (side view): like a push-up but the body line ends at the knees on the floor. */
+export function kneePushupSkeleton(elbowDeg: number, body: Body, origin: Point): Skeleton {
+  const sk = pushupSkeleton(elbowDeg, body, origin);
+  const sh = sk.leftShoulder!;
+  const floorY = origin.y;
+  const knee = { x: sh.x - (body.torso + body.thigh) * 0.97, y: floorY - 4 };
+  const t = body.torso / (body.torso + body.thigh);
+  const hip = { x: sh.x + (knee.x - sh.x) * t, y: sh.y + (knee.y - sh.y) * t };
+  // Shins up behind the knees (feet raised), knee angle ~ 70–90°.
+  const ankle = { x: knee.x + 0.3 * body.shin, y: floorY - 0.95 * body.shin };
+  return { ...sk, leftHip: hip, leftKnee: knee, leftAnkle: ankle };
 }
 
 /** Keyframes for `n` rope jumps of `heightPx` at `hz` jumps per second (after a standing lead-in). */
@@ -373,6 +404,10 @@ export interface SequenceOptions {
   spikes?: { atMs: number; kp: keyof typeof KP; dx: number; dy: number }[];
   /** Explicit [timeMs, angleDeg] keyframes; overrides `reps` when given. */
   keyframes?: [number, number][];
+  /** Pose source: 'mediapipe' also emits heel/toe points (Pose.feet). Default 'movenet'. */
+  source?: PoseSource;
+  /** Keypoints hidden (near-zero score) during given windows, e.g. an occluded side. */
+  hide?: { kps: (keyof typeof KP | FootName)[]; fromMs?: number; toMs?: number }[];
   /** Override posture: e.g. for "standing while bending arms" tests. */
   skeletonFn?: (deg: number, body: Body, origin: Point) => Skeleton;
 }
@@ -430,7 +465,7 @@ const SKELETONS: Record<ExerciseId, (deg: number, body: Body, origin: Point) => 
   pushup: pushupSkeleton,
   squat: squatSkeleton,
   pullup: pullupSkeleton,
-  situp: situpSkeleton,
+  abs: absSkeleton,
   bench: benchSkeleton,
   jumprope: jumpSkeleton,
   plank: plankSkeleton,
@@ -444,7 +479,7 @@ export function generateSequence(opts: SequenceOptions): Pose[] {
   const H = opts.imageHeight ?? (isPortrait ? 640 : 480);
   const rand = rng(opts.seed ?? 1);
   const noise = opts.noisePx ?? 0;
-  const score = opts.score ?? 0.8;
+  const score = opts.score ?? (opts.source === 'mediapipe' ? 0.95 : 0.8);
   const track = opts.keyframes
     ? keyframeTrack(opts.keyframes)
     : angleTrack(opts.reps, opts.leadInMs ?? 800, opts.leadOutMs ?? 800);
@@ -452,7 +487,7 @@ export function generateSequence(opts: SequenceOptions): Pose[] {
   const origin: Point =
     opts.exercise === 'pushup' || opts.exercise === 'plank'
       ? { x: W * 0.75, y: H * 0.8 }
-      : opts.exercise === 'situp'
+      : opts.exercise === 'abs'
         ? { x: W * 0.45, y: H * 0.8 }
         : opts.exercise === 'bench'
           ? { x: W * 0.6, y: H * 0.6 }
@@ -464,31 +499,40 @@ export function generateSequence(opts: SequenceOptions): Pose[] {
 
   const poses: Pose[] = [];
   const dt = 1000 / fps;
+  const source = opts.source ?? 'movenet';
+  const isHidden = (name: string, t: number) =>
+    (opts.hide ?? []).some((h) => (h.kps as string[]).includes(name) && t >= (h.fromMs ?? 0) && t < (h.toMs ?? Number.POSITIVE_INFINITY));
+  const emit = (p: Point | undefined, name: string, t: number, hidden: boolean, out: number[], index: number) => {
+    if (!p || hidden || isHidden(name, t)) {
+      out[index * 3] = rand();
+      out[index * 3 + 1] = rand();
+      out[index * 3 + 2] = 0.05 * rand();
+      return;
+    }
+    let x = p.x + noise * gaussian(rand);
+    let y = p.y + noise * gaussian(rand);
+    for (const sp of opts.spikes ?? []) {
+      if (sp.kp === name && Math.abs(t - sp.atMs) < dt / 2) {
+        x += sp.dx;
+        y += sp.dy;
+      }
+    }
+    out[index * 3] = x / W;
+    out[index * 3 + 1] = y / H;
+    out[index * 3 + 2] = Math.min(1, Math.max(0, score + 0.03 * gaussian(rand)));
+  };
   for (let t = 0; t <= track.durationMs; t += dt) {
     const sk = skeletonFn(track.at(t), body, origin);
     const kps = new Array<number>(NUM_KEYPOINTS * 3).fill(0);
     const hidden = (opts.dropouts ?? []).some((d) => t >= d.fromMs && t < d.toMs);
-    for (const [name, index] of Object.entries(KP) as [keyof typeof KP, number][]) {
-      const p = sk[name];
-      if (!p || hidden) {
-        kps[index * 3] = rand();
-        kps[index * 3 + 1] = rand();
-        kps[index * 3 + 2] = 0.05 * rand();
-        continue;
-      }
-      let x = p.x + noise * gaussian(rand);
-      let y = p.y + noise * gaussian(rand);
-      for (const s of opts.spikes ?? []) {
-        if (s.kp === name && Math.abs(t - s.atMs) < dt / 2) {
-          x += s.dx;
-          y += s.dy;
-        }
-      }
-      kps[index * 3] = x / W;
-      kps[index * 3 + 1] = y / H;
-      kps[index * 3 + 2] = Math.min(1, Math.max(0, score + 0.05 * gaussian(rand)));
+    for (const [name, index] of Object.entries(KP) as [keyof typeof KP, number][]) emit(sk[name], name, t, hidden, kps, index);
+    const pose: Pose = { keypoints: kps, width: W, height: H, timestamp: t, source };
+    if (source === 'mediapipe') {
+      const feet = new Array<number>(12).fill(0);
+      for (const [name, index] of Object.entries(FOOT) as [FootName, number][]) emit(sk[name], name, t, hidden, feet, index);
+      pose.feet = feet;
     }
-    poses.push({ keypoints: kps, width: W, height: H, timestamp: t });
+    poses.push(pose);
   }
   return poses;
 }

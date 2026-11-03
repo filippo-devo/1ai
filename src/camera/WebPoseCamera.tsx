@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
-import { TRACKING } from '../counting/config';
+import { VISIBILITY } from '../analysis/config';
 import { COCO_FROM_MEDIAPIPE } from '../pose/mediapipe';
 import { webMessageToPose, type WebPoseMessage } from '../pose/web/messages';
 import { buildPoseHtml, DEFAULT_ASSETS_BASE, DEFAULT_MODEL_URL } from '../pose/web/poseHtml';
@@ -35,7 +35,7 @@ export function WebPoseCamera({ position, active, debug, highlight, onPose }: Po
         facingMode: position === 'front' ? 'user' : 'environment',
         debug: initialDebug,
         highlight: highlight.map((i) => COCO_FROM_MEDIAPIPE[i]),
-        minScore: TRACKING.minKeypointScore,
+        minScore: VISIBILITY.mediapipe,
       }),
     [position, highlight, initialDebug],
   );

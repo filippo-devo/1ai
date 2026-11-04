@@ -332,6 +332,16 @@ export const JUMP_MOVENET: Partial<JumpConfig> = {
   minAirMs: 70,
 };
 
+/** Automatic front/side view recognition before the start (push-up variant). */
+export const VIEW_DETECTION = {
+  /** Shoulder width / arm length (image) at or above this => front view… */
+  frontRatio: 0.45,
+  /** …at or below this (or only one shoulder visible) => side view; in between undecided. */
+  sideRatio: 0.25,
+  /** The same answer must hold this long. */
+  holdMs: 800,
+};
+
 export const CALIBRATION = {
   /** Hold the start position this long… */
   holdMs: 1200,

@@ -178,6 +178,9 @@ na zapisanych lub syntetycznych sekwencjach landmarków (`src/testing`, `__tests
   złapanie osoby; słabe punkty i tak odrzucają progi powyżej.
 - Widok boczny: jedna strona, **nigdy uśredniana** z zasłoniętą. Widok z przodu (podciąganie): obie strony
   uśredniane tylko, gdy obie są widoczne; inaczej pomiar jednostronny (oznaczony w wynikach).
+- **Wariant pompki dobiera się sam** przed startem: szerokość barków / długość ramienia w obrazie ≥ 0,45 przez
+  0,8 s ⇒ „Od przodu”, ≤ 0,25 (lub widoczna jedna ręka) ⇒ „Z boku” (`src/analysis/view.ts`). Ręczny wybór
+  wariantu wyłącza automat. Wybór wariantu jest widoczny także w zwiniętym panelu.
 - **Pompka od przodu** (telefon na podłodze przed głową): kąt łokcia w 2D jest tu skrócony perspektywą
   (łokieć ugina się częściowo w stronę kamery), więc wartością sterującą jest **zastępczy kąt łokcia**
   z obniżenia barków: r = (wysokość barków nad dłońmi) / (ta sama wysokość przy prostych rękach – odporne

@@ -1,4 +1,6 @@
+import { FrameView } from '../src/analysis/landmarks';
 import { equivalentElbowAngle } from '../src/analysis/metrics';
+import { ViewDetector } from '../src/analysis/view';
 import { analyze, calibrate } from '../src/testing/run';
 import {
   fullReps,
@@ -97,4 +99,23 @@ describe('push-up from the front', () => {
     expect(calibrate('pushup', 'front', poses).result).toBeNull();
     expect(analyze('pushup', 'front', poses).result.counts?.detected).toBe(0);
   });
+
+  test.each([
+    ['front, MediaPipe', 'front', 'mediapipe'],
+    ['front, MoveNet', 'front', 'movenet'],
+    ['side, MediaPipe', 'side', 'mediapipe'],
+    ['side, MoveNet', 'side', 'movenet'],
+  ] as const)('camera view is recognised automatically (%s)', (_n, expected, source) => {
+    const reps = fullReps(2, { topDeg: 172, bottomDeg: 80 });
+    const poses =
+      expected === 'front'
+        ? seq(reps, { source })
+        : generateSequence({ exercise: 'pushup', reps, source, noisePx: 0.8 });
+    const d = new ViewDetector();
+    const seen = poses.map((p) => d.update(new FrameView(p)));
+    // Decided within the first second and never flips during the movement.
+    expect(seen[30]).toBe(expected);
+    expect(seen.slice(30).every((v) => v === expected)).toBe(true);
+  });
 });
+

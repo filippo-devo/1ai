@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CalibrationCollector, type CalibrationState } from '../analysis/calibration';
 import { CYCLIC, EXERCISE_IDS, type ExerciseId, type VariantId } from '../analysis/config';
 import { DEFAULT_VARIANT, EXERCISES, exerciseInfo } from '../analysis/exercises';
+import { ViewDetector } from '../analysis/view';
 import { cocoIndices, FrameView, PART_PL, type Part } from '../analysis/landmarks';
 import { ExerciseAnalyzer, setLastResult, type AnalysisSnapshot } from '../analysis/session';
 import { PoseCamera, POSE_ENGINE } from '../camera/PoseCamera';
@@ -91,7 +92,16 @@ export default function WorkoutScreen() {
   const accumulatedMsRef = useRef(0);
   const activeSinceRef = useRef<number | null>(null);
 
-  const chooseVariant = (v: VariantId) => {
+  // Push-ups: before the start the variant follows the camera view (front ↔ side) until the
+  // user picks a variant by hand.
+  const manualVariantRef = useRef(false);
+  const [viewDetector] = useState(() => new ViewDetector());
+  const [autoVariant, setAutoVariant] = useState(false);
+
+  const chooseVariant = (v: VariantId, auto = false) => {
+    if (!auto) manualVariantRef.current = true;
+    setAutoVariant(auto);
+    uiKeyRef.current.calib = '';
     setVariant(v);
     setTarget(cyclicConfig(exercise, v)?.target ?? null);
     setCalibrator(new CalibrationCollector(exercise, v));
@@ -111,6 +121,11 @@ export default function WorkoutScreen() {
           setCalibration(cal);
         }
         const view = new FrameView(pose);
+        if (exercise === 'pushup' && !manualVariantRef.current) {
+          const seen = viewDetector.update(view);
+          if (seen === 'front' && variant !== 'front') chooseVariant('front', true);
+          else if (seen === 'side' && variant === 'front') chooseVariant('standard', true);
+        }
         const needed: Part[] = [...new Set<Part>([...partsFor(exercise, variant), ...(view.provides('toe') && exercise === 'jumprope' ? (['toe'] as Part[]) : [])])];
         const next = needed.map((part) => ({ part, visible: !!(view.get(part, 'left') || view.get(part, 'right')) }));
         const partsKey = next.map((p) => `${p.part}${p.visible ? 1 : 0}`).join();
@@ -134,7 +149,8 @@ export default function WorkoutScreen() {
         }
       }
     },
-    [exercise, variant, calibrator, voice],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- chooseVariant only sets state
+    [exercise, variant, calibrator, voice, viewDetector],
   );
 
   // --- timer (active time only, pauses excluded) ------------------------------------------
@@ -304,7 +320,8 @@ export default function WorkoutScreen() {
             <SetupPanel
               exercise={exercise}
               variant={variant}
-              onVariant={chooseVariant}
+              onVariant={(v) => chooseVariant(v)}
+              autoVariant={autoVariant}
               target={target}
               onTarget={setTarget}
               calibration={calibration}
@@ -471,6 +488,7 @@ function SetupPanel({
   exercise,
   variant,
   onVariant,
+  autoVariant,
   target,
   onTarget,
   calibration,
@@ -481,6 +499,8 @@ function SetupPanel({
   exercise: ExerciseId;
   variant: VariantId;
   onVariant: (v: VariantId) => void;
+  /** The current variant was chosen automatically from the camera view. */
+  autoVariant: boolean;
   target: number | null;
   onTarget: (v: number) => void;
   calibration: CalibrationState | null;
@@ -572,24 +592,6 @@ function SetupPanel({
 
       {expanded && (
         <ScrollView style={styles.expandedScroll} contentContainerStyle={styles.expanded} showsVerticalScrollIndicator={false}>
-          {info.variants.length > 1 && (
-            <View style={styles.segment} accessibilityRole="radiogroup">
-              {info.variants.map((v) => {
-                const on = v.id === variant;
-                return (
-                  <Pressable
-                    key={v.id}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected: on }}
-                    onPress={() => onVariant(v.id)}
-                    style={[styles.segmentItem, on && { backgroundColor: tint }]}
-                  >
-                    <Text style={[styles.segmentText, on && { color: colors.onAccent }]}>{v.label}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          )}
 
           <View style={styles.steps}>
             {steps.map((s) => (
@@ -632,6 +634,30 @@ function SetupPanel({
             </View>
           )}
         </ScrollView>
+      )}
+
+      {info.variants.length > 1 && (
+        <View style={styles.segment} accessibilityRole="radiogroup">
+          {info.variants.map((v) => {
+            const on = v.id === variant;
+            return (
+              <Pressable
+                key={v.id}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: on }}
+                onPress={() => onVariant(v.id)}
+                style={[styles.segmentItem, on && { backgroundColor: tint }]}
+              >
+                <Text style={[styles.segmentText, on && { color: colors.onAccent }]}>{v.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+      {exercise === 'pushup' && (
+        <Text style={styles.variantNote}>
+          {autoVariant ? 'Wariant dobrany automatycznie do ustawienia telefonu' : 'Z boku / od przodu – rozpoznawane samo, możesz też wybrać ręcznie'}
+        </Text>
       )}
 
       <View style={styles.calibCard}>
@@ -727,6 +753,7 @@ const styles = StyleSheet.create({
   moreText: { color: colors.muted, fontSize: 12, fontWeight: '600' },
   expandedScroll: { flexGrow: 0, flexShrink: 1 },
   expanded: { gap: 14, paddingBottom: 2 },
+  variantNote: { color: colors.muted, fontSize: 12, textAlign: 'center', marginTop: -6 },
   calibLabel: { color: colors.muted, fontSize: 12, fontWeight: '800', letterSpacing: 1.5 },
   steps: { gap: 10 },
   stepRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },

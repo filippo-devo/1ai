@@ -26,7 +26,7 @@ export interface FrameMetrics {
 }
 
 interface Spec {
-  mode: 'single' | 'both';
+  mode: 'single' | 'both' | 'any';
   /** Called with the frame time before compute() (specs with time-dependent state). */
   setTime?(t: number): void;
   /** Points required for the driving metric. */
@@ -61,36 +61,7 @@ function specFor(exercise: ExerciseId, variant: VariantId): Spec {
         },
       };
     case 'pushup':
-      if (variant === 'front') return frontPushupSpec();
-      return {
-        mode: 'single',
-        required: ['shoulder', 'elbow', 'wrist', 'hip'],
-        optional: ['knee', 'ankle'],
-        compute(p) {
-          const elbow = angle(p('shoulder'), p('elbow'), p('wrist'));
-          const arm = sum(dist(p('shoulder'), p('elbow')), dist(p('elbow'), p('wrist')));
-          // Shoulders above the hands (image y down) ÷ arm length; decreases going down.
-          const shoulderHeight = div(sub(p('wrist')?.y ?? null, p('shoulder')?.y ?? null), arm);
-          const torso = inclination(p('shoulder'), p('hip'));
-          const end = variant === 'knees' ? p('knee') : p('ankle');
-          const line = angle(p('shoulder'), p('hip'), end);
-          const kneeAngle = angle(p('hip'), p('knee'), p('ankle'));
-          const kn = p('knee');
-          const wr = p('wrist');
-          const kneeOnFloor =
-            kneeAngle !== null && kn && wr && arm !== null
-              ? kneeAngle < TECHNIQUE.pushup.kneelingKneeAngle && kn.y >= wr.y - 0.15 * arm
-                ? 1
-                : 0
-              : null;
-          const posture = torso !== null && shoulderHeight !== null ? torso <= 50 && shoulderHeight > -0.1 : null;
-          return {
-            primary: elbow,
-            values: { elbow, shoulderHeight, torso, bodyLineDev: line === null ? null : 180 - line, kneeAngle, kneeOnFloor },
-            posture,
-          };
-        },
-      };
+      return pushupSpec(variant);
     case 'bench':
       return {
         mode: 'single',
@@ -210,64 +181,91 @@ export function equivalentElbowAngle(r: number): number {
   return 120 + (60 * (c - knee)) / (1 - knee);
 }
 
-function frontPushupSpec(): Spec {
-  const HALF_LIFE_MS = 30000;
-  const state: Record<LR, { peak: number; peakT: number; recent: number[]; seenT: number }> = {
-    left: { peak: 0, peakT: 0, recent: [], seenT: -Infinity },
-    right: { peak: 0, peakT: 0, recent: [], seenT: -Infinity },
+/**
+ * Push-up, ANY camera view (side, front, diagonal). Only the shoulders and hands are
+ * required: elbows are often hidden or foreshortened (from the front they bend toward the
+ * camera) and hips/feet are often out of the picture.
+ *
+ * d = how far the shoulders are above the hands (image y). L = the person's own
+ * straight-arm value of d: the 90th percentile of d over the last ~10 s in push-up
+ * posture (so it is set by the tops of the repetitions, adapts when the person moves,
+ * and one noisy frame cannot change it). r = d / L → equivalentElbowAngle(r).
+ * Side view, elbow visible: the 2D elbow angle is reported too (technique values).
+ */
+function pushupSpec(variant: VariantId): Spec {
+  const WINDOW_MS = 10000;
+  const state: Record<LR, { hist: { t: number; d: number }[]; seenT: number }> = {
+    left: { hist: [], seenT: -Infinity },
+    right: { hist: [], seenT: -Infinity },
   };
-  /** After this long without the arm in view the reference is measured again (person may have moved). */
+  /** After this long without the side in view, the reference is measured again. */
   const FORGET_AFTER_MS = 1500;
   let now = 0;
-  const decayed = (s: { peak: number; peakT: number }) => s.peak * Math.pow(0.5, Math.max(0, now - s.peakT) / HALF_LIFE_MS);
   return {
-    mode: 'both',
-    required: ['shoulder', 'elbow', 'wrist'],
-    optional: ['hip'],
+    mode: 'any',
+    required: ['shoulder', 'wrist'],
+    optional: ['elbow', 'hip', 'knee', 'ankle'],
+    // Each side is normalised by its own reference, so the visible side(s) can be used
+    // frame by frame (the far arm in a side view is often lost for a moment).
     setTime(t) {
       now = t;
     },
     compute(p, side) {
       const sh = p('shoulder');
-      const el = p('elbow');
       const wr = p('wrist');
-      const elbow2d = angle(sh, el, wr);
-      const armImg = sum(dist(sh, el), dist(el, wr));
-      const d = sh && wr ? wr.y - sh.y : null;
-      // Standing upright with the arms hanging also has the hands below the shoulders.
-      // In a push-up seen from the front the hips are behind the shoulders, i.e. near
-      // shoulder height in the image – never most of an arm length below them.
+      const el = p('elbow');
       const hp = p('hip');
-      const standing = !!(hp && sh && armImg !== null && hp.y - sh.y > 0.6 * armImg);
-      const posture = d === null || armImg === null ? null : d > 0.25 * armImg && !standing;
-
+      const kn = p('knee');
+      const an = p('ankle');
+      const d = sh && wr ? wr.y - sh.y : null;
       const st = state[side];
-      if (d !== null && now - st.seenT > FORGET_AFTER_MS) {
-        st.peak = 0;
-        st.recent = [];
-      }
+      if (d !== null && now - st.seenT > FORGET_AFTER_MS) st.hist = [];
       if (d !== null) st.seenT = now;
-      if (posture && d !== null && elbow2d !== null && elbow2d >= 150) {
-        // Median of the last straight-arm frames: a single noisy frame cannot raise the peak.
-        st.recent.push(d);
-        if (st.recent.length > 15) st.recent.shift();
-        const sorted = [...st.recent].sort((a, b) => a - b);
-        const candidate = sorted[Math.floor(sorted.length / 2)];
-        const n = sorted.length;
-        const current = decayed(st);
-        // Raise the peak at once; lower it only when a whole, STABLE window (not a descent
-        // with foreshortened elbows) is clearly below it: the person moved away from the phone.
-        const movedAway = n === 15 && sorted[n - 1] < 0.9 * current && sorted[n - 1] - sorted[0] < 0.03 * current;
-        if ((st.recent.length >= 3 && candidate >= current) || movedAway) {
-          st.peak = candidate;
-          st.peakT = now;
-        }
-      }
-      const peak = decayed(st);
-      const ref = peak > 0 ? peak : (armImg ?? 0);
+
+      // Reference straight-arm height (robust percentile of recent frames).
+      while (st.hist.length > 0 && now - st.hist[0].t > WINDOW_MS) st.hist.shift();
+      const ds = st.hist.map((h) => h.d).sort((a, b) => a - b);
+      const ref = ds.length >= 8 ? ds[Math.min(ds.length - 1, Math.floor(0.9 * ds.length))] : Math.max(d ?? 0, ...ds);
+
+      // Standing (or walking to the phone): a vertical shoulder → hip → knee chain.
+      // In a push-up the legs are behind/along the body, from any side.
+      const unit = Math.max(ref, 1);
+      const standing = !!(
+        sh &&
+        hp &&
+        kn &&
+        hp.y - sh.y > 0.5 * unit &&
+        kn.y - hp.y > 0.5 * unit &&
+        (!an || an.y - kn.y > 0.4 * unit)
+      );
+      const posture = d === null ? null : d > 0 && !standing;
+      if (posture && d !== null) st.hist.push({ t: now, d });
+
       const ratio = d !== null && ref > 0 ? Math.max(0, Math.min(1, d / ref)) : null;
       const equiv = ratio === null ? null : equivalentElbowAngle(ratio);
-      return { primary: equiv, values: { elbow: equiv, elbow2d, shoulderHeight: ratio }, posture };
+
+      // Technique values where the view allows them (side view): body line, knees.
+      const elbow2d = angle(sh, el, wr);
+      const torso = inclination(sh, hp);
+      const sideLike = torso !== null && torso <= 50;
+      const end = variant === 'knees' ? kn : an;
+      const line = sideLike ? angle(sh, hp, end) : null;
+      const kneeAngle = sideLike ? angle(hp, kn, an) : null;
+      const kneeOnFloor =
+        kneeAngle !== null && kn && wr ? (kneeAngle < TECHNIQUE.pushup.kneelingKneeAngle && kn.y >= wr.y - 0.15 * unit ? 1 : 0) : null;
+      return {
+        primary: equiv,
+        values: {
+          elbow: equiv,
+          elbow2d,
+          shoulderHeight: ratio,
+          torso,
+          bodyLineDev: line === null ? null : 180 - line,
+          kneeAngle,
+          kneeOnFloor,
+        },
+        posture,
+      };
     },
   };
 }

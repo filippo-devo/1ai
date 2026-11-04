@@ -124,7 +124,7 @@ Tryb debugowania (panel z fps, progami itp.) został usunięty z aplikacji – d
    a panel na dole jest nałożony na obraz. Zwinięty panel pokazuje tylko status kalibracji
    (np. „Ustaw się w kadrze (barki, biodra, kolana)”) i – po kalibracji – przycisk Start.
    Przeciągnięcie uchwytu w górę (lub dotknięcie „Instrukcja i ustawienia”) rozwija: wariant
-   (pompka z boku / od przodu / na kolanach, crunch / sit-up), **cel zakresu** (np. kolano ≤ 100°, −/+),
+   (pompka klasyczna / na kolanach – z boku lub od przodu, crunch / sit-up), **cel zakresu** (np. kolano ≤ 100°, −/+),
    instrukcję ustawienia telefonu i listę widocznych punktów ciała.
 3. **Kalibracja**: krótkie przytrzymanie pozycji startowej (~1,2 s) mierzy osobniczy wyprost,
    szum pomiaru i dostępność punktów. Opcjonalnie 2–3 spokojne ruchy mierzą **zakres** – zapisywany
@@ -178,17 +178,16 @@ na zapisanych lub syntetycznych sekwencjach landmarków (`src/testing`, `__tests
   złapanie osoby; słabe punkty i tak odrzucają progi powyżej.
 - Widok boczny: jedna strona, **nigdy uśredniana** z zasłoniętą. Widok z przodu (podciąganie): obie strony
   uśredniane tylko, gdy obie są widoczne; inaczej pomiar jednostronny (oznaczony w wynikach).
-- **Wariant pompki dobiera się sam** przed startem: szerokość barków / długość ramienia w obrazie ≥ 0,45 przez
-  0,8 s ⇒ „Od przodu”, ≤ 0,25 (lub widoczna jedna ręka) ⇒ „Z boku” (`src/analysis/view.ts`). Ręczny wybór
-  wariantu wyłącza automat. Wybór wariantu jest widoczny także w zwiniętym panelu.
-- **Pompka od przodu** (telefon na podłodze przed głową): kąt łokcia w 2D jest tu skrócony perspektywą
-  (łokieć ugina się częściowo w stronę kamery), więc wartością sterującą jest **zastępczy kąt łokcia**
-  z obniżenia barków: r = (wysokość barków nad dłońmi) / (ta sama wysokość przy prostych rękach – odporne
-  maksimum z ostatnich klatek z prostą ręką, wygasające z półokresem 30 s, mierzone od nowa po zniknięciu
-  ręki z kadru > 1,5 s). Dla r ≤ sin 60° kąt = 2·asin(r) (ramię o równych odcinkach; r = 0,766 → 100°),
-  powyżej liniowo 120°→180° (przy pełnym wyproście asin zamieniałby 1 % szumu w ~10°). Stanie z
-  opuszczonymi rękami nie jest pozycją startową (biodra wyraźnie poniżej barków). Linii ciała / opadania
-  bioder nie da się z przodu ocenić.
+- **Pompka – jeden detektor dla każdego ustawienia** (z boku, od przodu, po skosie): wymagane są tylko
+  barki i nadgarstki. Wartość sterująca to **zastępczy kąt łokcia** z obniżenia barków:
+  r = (wysokość barków nad dłońmi) / (ta sama wysokość przy prostych rękach = 90. percentyl z ostatnich 10 s
+  w pozycji podporu, osobno dla każdej strony, liczony od nowa po zniknięciu ręki z kadru > 1,5 s).
+  Dla r ≤ sin 60° kąt = 2·asin(r) (r = 0,766 → 100°), powyżej liniowo 120°→180° (przy pełnym wyproście
+  asin zamieniałby 1 % szumu w ~10°). Każda strona ma własne odniesienie, więc w każdej klatce używane są
+  te ręce, które widać (dalsza ręka w widoku z boku często znika na chwilę). Stanie (pionowy łańcuch
+  bark → biodro → kolano) nie jest pozycją podporu. Linia ciała i pompka na kolanach – tylko z boku.
+- **START jest zawsze dostępny**: kalibracja w panelu jest opcjonalna; bez niej pozycja startowa
+  (góra pompki itd.) jest rozpoznawana po odliczaniu, zanim zacznie się liczenie.
 - Strona jest **blokowana na czas powtórzenia**: jej utrata ⇒ brak danych (luka), a nie przeskok na drugą stronę.
 
 ### Detektor cykli (wszystkie ćwiczenia na powtórzenia)
@@ -248,8 +247,9 @@ npm run lint
   brak danych, ukryty nadgarstek (kryterium nieocenialne), drżenie, wstanie, FPS i rozmiary sylwetki.
 - `__tests__/jump.test.ts` – podskoki: różne wysokości i tempo, 15–60 fps, **wspięcia na palce**, stanie,
   odejście od kamery, brak punktów palców (MoveNet), jedna stopa, rytm/przerwy/regularność, wyjście z kadru.
-- `__tests__/pushupFront.test.ts` – pompka od przodu: łokcie przy ciele i rozstawione, połówki ruchu, MoveNet
-  i inne proporcje, kalibracja, stanie z opuszczonymi rękami (nie liczy), odsunięcie się od telefonu.
+- `__tests__/pushupViews.test.ts` – pompka od przodu tym samym detektorem: łokcie przy ciele i rozstawione,
+  połówki ruchu, MoveNet i inne proporcje, kalibracja, stanie (nie liczy), stanie → zejście do pompek,
+  odsunięcie się od telefonu, migająca dalsza ręka w widoku z boku.
 - `__tests__/pose.test.ts` – adapter modelu (letterbox, orientacja, crop, MediaPipe → COCO, pięty/palce).
 - `__tests__/evaluation.test.ts` – ewaluacja na nagraniach z ręcznie opisanymi powtórzeniami (sekcja 6).
 
@@ -318,7 +318,7 @@ Ustaw telefon zgodnie z instrukcją. Wynik (cykle z powodami, pokrycie, pomiary)
 | 6 | Zatrzymanie w połowie ruchu i powrót | 1 cykl „cel nieosiągnięty” |
 | 7 | Wyjście z kadru w dolnej fazie | „Ustaw się w kadrze”, próba nieocenialna, potem ponowne ustawienie |
 | 8 | Zasłonięcie jednej strony (podciąganie przodem) | liczy, cykle oznaczone jako jednostronne |
-| 9 | Pompka na kolanach przy wariancie „Z boku” | wskazówka o wariancie, brak „celu osiągniętego” |
+| 9 | Pompka na kolanach przy wariancie „Klasyczna” | wskazówka o wariancie, brak „celu osiągniętego” |
 | 10 | Wyciskanie: zdjęcie sztangi, 3 powtórzenia, odłożenie | 3 cykle; zdjęcie i odłożenie nieliczone |
 | 11 | Brzuszki: same ruchy głową | 0 cykli |
 | 12 | Deska z opadającymi biodrami | wskazówka „Biodra opadają”, czas w tolerancji stoi |

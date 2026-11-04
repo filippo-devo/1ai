@@ -8,10 +8,10 @@
  * re-validated on the test split of the recordings.
  */
 
-export const DETECTOR_VERSION = 'v2.1-2026-11-04';
+export const DETECTOR_VERSION = 'v2.2-2026-11-04';
 
 export type ExerciseId = 'squat' | 'plank' | 'pushup' | 'bench' | 'pullup' | 'abs' | 'jumprope';
-export type VariantId = 'standard' | 'knees' | 'front' | 'crunch' | 'situp' | 'strict' | 'basic';
+export type VariantId = 'standard' | 'knees' | 'crunch' | 'situp' | 'strict' | 'basic';
 
 export const EXERCISE_IDS: ExerciseId[] = ['squat', 'plank', 'pushup', 'bench', 'pullup', 'abs', 'jumprope'];
 
@@ -122,51 +122,38 @@ export const CYCLIC: Record<string, CyclicConfig> = {
     minRestEnter: 150,
     calibStart: 150,
   },
-  /** Push-up: elbow; target ≤100° supported by the shoulders descending. */
+  /**
+   * Push-up (any view): EQUIVALENT elbow angle from how far the shoulders are above the
+   * hands relative to the person's own straight-arm height (metrics.ts). 180° = arms
+   * straight; target ≤100° ≈ shoulders lowered by ~23 % of the straight-arm height.
+   */
   'pushup/standard': {
     ...strength,
     direction: 'decrease',
     mode: 'absolute',
-    restEnter: 165,
-    restExit: 155,
+    // r ≥ 0.933 (top) / r ≤ 0.911 (left the top): real sets rarely return to 100 % extension.
+    restEnter: 150,
+    restExit: 140,
     target: 100,
     targetOptions: [110, 100, 90, 80],
     minAmplitude: 25,
     minCycleMs: 350,
-    minRestEnter: 150,
-    calibStart: 145,
-  },
-  /**
-   * Push-up seen FROM THE FRONT (phone on the floor in front of the head). The elbow angle
-   * is foreshortened in this view, so the driving value is an EQUIVALENT elbow angle
-   * computed from how far the shoulders are above the hands relative to the straight-arm
-   * height measured at the top (see metrics.ts). Thresholds match the side view.
-   */
-  'pushup/front': {
-    ...strength,
-    direction: 'decrease',
-    mode: 'absolute',
-    restEnter: 160,
-    restExit: 150,
-    target: 100,
-    targetOptions: [110, 100, 90, 80],
-    minAmplitude: 25,
-    minCycleMs: 350,
-    minRestEnter: 145,
-    calibStart: 140,
+    minRestEnter: 140,
+    calibStart: 135,
   },
   'pushup/knees': {
     ...strength,
     direction: 'decrease',
     mode: 'absolute',
-    restEnter: 165,
-    restExit: 155,
+    // r ≥ 0.933 (top) / r ≤ 0.911 (left the top): real sets rarely return to 100 % extension.
+    restEnter: 150,
+    restExit: 140,
     target: 100,
     targetOptions: [110, 100, 90, 80],
     minAmplitude: 25,
     minCycleMs: 350,
-    minRestEnter: 150,
-    calibStart: 145,
+    minRestEnter: 140,
+    calibStart: 135,
   },
   /** Bench press: elbow; individual bottom (default ≤100°); READY only after a stable lockout. */
   'bench/standard': {

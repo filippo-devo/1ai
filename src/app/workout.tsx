@@ -8,7 +8,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CalibrationCollector, type CalibrationState } from '../analysis/calibration';
 import { CYCLIC, EXERCISE_IDS, type ExerciseId, type VariantId } from '../analysis/config';
 import { DEFAULT_VARIANT, EXERCISES, exerciseInfo } from '../analysis/exercises';
-import { ViewDetector } from '../analysis/view';
 import { cocoIndices, FrameView, PART_PL, type Part } from '../analysis/landmarks';
 import { ExerciseAnalyzer, setLastResult, type AnalysisSnapshot } from '../analysis/session';
 import { PoseCamera, POSE_ENGINE } from '../camera/PoseCamera';
@@ -92,15 +91,7 @@ export default function WorkoutScreen() {
   const accumulatedMsRef = useRef(0);
   const activeSinceRef = useRef<number | null>(null);
 
-  // Push-ups: before the start the variant follows the camera view (front ↔ side) until the
-  // user picks a variant by hand.
-  const manualVariantRef = useRef(false);
-  const [viewDetector] = useState(() => new ViewDetector());
-  const [autoVariant, setAutoVariant] = useState(false);
-
-  const chooseVariant = (v: VariantId, auto = false) => {
-    if (!auto) manualVariantRef.current = true;
-    setAutoVariant(auto);
+  const chooseVariant = (v: VariantId) => {
     uiKeyRef.current.calib = '';
     setVariant(v);
     setTarget(cyclicConfig(exercise, v)?.target ?? null);
@@ -121,12 +112,7 @@ export default function WorkoutScreen() {
           setCalibration(cal);
         }
         const view = new FrameView(pose);
-        if (exercise === 'pushup' && !manualVariantRef.current) {
-          const seen = viewDetector.update(view);
-          if (seen === 'front' && variant !== 'front') chooseVariant('front', true);
-          else if (seen === 'side' && variant === 'front') chooseVariant('standard', true);
-        }
-        const needed: Part[] = [...new Set<Part>([...partsFor(exercise, variant), ...(view.provides('toe') && exercise === 'jumprope' ? (['toe'] as Part[]) : [])])];
+        const needed: Part[] = [...new Set<Part>([...EXERCISE_PARTS[exercise], ...(view.provides('toe') && exercise === 'jumprope' ? (['toe'] as Part[]) : [])])];
         const next = needed.map((part) => ({ part, visible: !!(view.get(part, 'left') || view.get(part, 'right')) }));
         const partsKey = next.map((p) => `${p.part}${p.visible ? 1 : 0}`).join();
         if (partsKey !== keys.parts) {
@@ -149,8 +135,7 @@ export default function WorkoutScreen() {
         }
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- chooseVariant only sets state
-    [exercise, variant, calibrator, voice, viewDetector],
+    [exercise, calibrator, voice],
   );
 
   // --- timer (active time only, pauses excluded) ------------------------------------------
@@ -261,7 +246,7 @@ export default function WorkoutScreen() {
     setCalibration(null);
   };
 
-  const highlight = useMemo(() => cocoIndices(partsFor(exercise, variant)), [exercise, variant]);
+  const highlight = useMemo(() => cocoIndices(EXERCISE_PARTS[exercise]), [exercise]);
   const counting = stage === 'active' || stage === 'paused';
 
   return (
@@ -321,7 +306,6 @@ export default function WorkoutScreen() {
               exercise={exercise}
               variant={variant}
               onVariant={(v) => chooseVariant(v)}
-              autoVariant={autoVariant}
               target={target}
               onTarget={setTarget}
               calibration={calibration}
@@ -341,15 +325,10 @@ export default function WorkoutScreen() {
 }
 
 /** Parts shown in the setup visibility checklist / highlighted in the overlay. */
-function partsFor(exercise: ExerciseId, variant: VariantId): Part[] {
-  if (exercise === 'pushup' && variant === 'front') return ['shoulder', 'elbow', 'wrist'];
-  return EXERCISE_PARTS[exercise];
-}
-
 const EXERCISE_PARTS: Record<ExerciseId, Part[]> = {
   squat: ['shoulder', 'hip', 'knee', 'ankle'],
   plank: ['shoulder', 'elbow', 'wrist', 'hip', 'knee', 'ankle'],
-  pushup: ['shoulder', 'elbow', 'wrist', 'hip'],
+  pushup: ['shoulder', 'wrist'],
   bench: ['shoulder', 'elbow', 'wrist', 'hip'],
   pullup: ['shoulder', 'elbow', 'wrist'],
   abs: ['shoulder', 'hip', 'knee', 'ankle'],
@@ -488,7 +467,6 @@ function SetupPanel({
   exercise,
   variant,
   onVariant,
-  autoVariant,
   target,
   onTarget,
   calibration,
@@ -499,8 +477,6 @@ function SetupPanel({
   exercise: ExerciseId;
   variant: VariantId;
   onVariant: (v: VariantId) => void;
-  /** The current variant was chosen automatically from the camera view. */
-  autoVariant: boolean;
   target: number | null;
   onTarget: (v: number) => void;
   calibration: CalibrationState | null;
@@ -656,7 +632,7 @@ function SetupPanel({
       )}
       {exercise === 'pushup' && (
         <Text style={styles.variantNote}>
-          {autoVariant ? 'Wariant dobrany automatycznie do ustawienia telefonu' : 'Z boku / od przodu – rozpoznawane samo, możesz też wybrać ręcznie'}
+          Liczy z boku i od przodu – telefon ustaw, jak Ci wygodnie
         </Text>
       )}
 
@@ -682,23 +658,17 @@ function SetupPanel({
         )}
       </View>
 
-      {(done || expanded) && (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Start"
-          accessibilityState={{ disabled: !done }}
-          disabled={!done}
-          onPress={onStart}
-          style={({ pressed }) => [
-            styles.startButton,
-            !done && styles.startButtonDisabled,
-            pressed && { transform: [{ scale: 0.98 }], opacity: 0.9 },
-          ]}
-        >
-          <MaterialCommunityIcons name="play" size={30} color={done ? colors.onAccent : colors.muted} />
-          <Text style={[styles.startText, !done && { color: colors.muted }]}>{done ? 'START' : 'Najpierw kalibracja'}</Text>
-        </Pressable>
-      )}
+      {/* START is always available: if the calibration did not finish here, the start
+          position is recognised during the countdown / first seconds of the set. */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Start"
+        onPress={onStart}
+        style={({ pressed }) => [styles.startButton, pressed && { transform: [{ scale: 0.98 }], opacity: 0.9 }]}
+      >
+        <MaterialCommunityIcons name="play" size={30} color={colors.onAccent} />
+        <Text style={styles.startText}>START</Text>
+      </Pressable>
     </View>
   );
 }
@@ -795,7 +765,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 6,
   },
-  startButtonDisabled: { backgroundColor: colors.surface2, shadowOpacity: 0, elevation: 0 },
   startText: { color: colors.onAccent, fontSize: 22, fontWeight: '800', letterSpacing: 2 },
   cancelButton: { marginHorizontal: 20, marginVertical: 16, height: 56, borderRadius: radius.lg, backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center' },
   cancelText: { color: colors.text, fontSize: 18, fontWeight: '700' },

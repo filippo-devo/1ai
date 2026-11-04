@@ -118,7 +118,12 @@ export class SideTracker {
   private current: LR[] | null = null;
   locked = false;
 
-  constructor(private readonly mode: 'single' | 'both') {}
+  /**
+   * 'any': every visible side each frame (no locking). Only for metrics normalised per side
+   * (push-up: each side has its own straight-arm reference), where switching sides cannot
+   * make the value jump.
+   */
+  constructor(private readonly mode: 'single' | 'both' | 'any') {}
 
   reset(): void {
     this.current = null;
@@ -127,6 +132,11 @@ export class SideTracker {
 
   select(view: FrameView, parts: Part[]): LR[] | null {
     const ok = (s: LR) => view.visible(parts, s);
+    if (this.mode === 'any') {
+      const vis = (['left', 'right'] as LR[]).filter(ok);
+      this.current = vis.length ? vis : null;
+      return this.current;
+    }
     if (this.locked) {
       // Mid-repetition: keep the side; if it is lost the metric is unavailable.
       return this.current && this.current.every(ok) ? this.current : null;

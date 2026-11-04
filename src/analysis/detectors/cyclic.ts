@@ -74,20 +74,17 @@ function rulesFor(exercise: ExerciseId, variant: VariantId): Rules {
       return {
         refs: ['shoulderHeight'],
         finish(c, out) {
+          // The driving value itself is the shoulder descent (any view): no second check.
           const ref = c.refs.shoulderHeight;
           const drop = ref !== null && Number.isFinite(c.min.shoulderHeight) ? ref - c.min.shoulderHeight : null;
           out.checks.shoulderDrop = drop;
+          out.checks.minElbow2d = Number.isFinite(c.min.elbow2d) ? c.min.elbow2d : null;
           out.checks.maxBodyLineDeviation = Number.isFinite(c.max.bodyLineDev) ? c.max.bodyLineDev : null;
           if (out.checks.maxBodyLineDeviation !== null && out.checks.maxBodyLineDeviation > TECHNIQUE.pushup.maxBodyLineDeviation) {
             out.flags.push('body_line');
           }
           const kneelingShare = c.frames > 0 ? (c.ones.kneeOnFloor ?? 0) / c.frames : 0;
           let ok = c.targetValue;
-          // Front view: the driving value itself is the shoulder descent, no second check.
-          if (variant !== 'front' && (drop === null || drop < TECHNIQUE.pushup.shoulderDropForTarget)) {
-            out.reasons.push('shoulders_not_descending');
-            ok = false;
-          }
           if (variant === 'standard' && kneelingShare > 0.5) {
             out.reasons.push('variant_knees_detected');
             ok = false;

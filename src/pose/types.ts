@@ -45,7 +45,7 @@ export const KP = {
 
 export const NUM_KEYPOINTS = 17;
 
-/** Bones drawn by the debug skeleton overlay. */
+/** Bones drawn by the skeleton overlay. */
 export const SKELETON_EDGES: readonly (readonly [number, number])[] = [
   [KP.leftShoulder, KP.rightShoulder],
   [KP.leftShoulder, KP.leftElbow],

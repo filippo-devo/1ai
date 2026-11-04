@@ -27,11 +27,13 @@ export interface FrameMetrics {
 
 interface Spec {
   mode: 'single' | 'both';
+  /** Called with the frame time before compute() (specs with time-dependent state). */
+  setTime?(t: number): void;
   /** Points required for the driving metric. */
   required: Part[];
   /** Optional points read on the same side(s) when visible. */
   optional: Part[];
-  compute(pts: (part: Part) => P | null): { primary: number | null; values: Record<string, number | null>; posture: boolean | null };
+  compute(pts: (part: Part) => P | null, side: LR): { primary: number | null; values: Record<string, number | null>; posture: boolean | null };
 }
 
 const sub = (a: number | null, b: number | null) => (a === null || b === null ? null : a - b);
@@ -59,6 +61,7 @@ function specFor(exercise: ExerciseId, variant: VariantId): Spec {
         },
       };
     case 'pushup':
+      if (variant === 'front') return frontPushupSpec();
       return {
         mode: 'single',
         required: ['shoulder', 'elbow', 'wrist', 'hip'],
@@ -188,6 +191,87 @@ function specFor(exercise: ExerciseId, variant: VariantId): Spec {
   }
 }
 
+/**
+ * Push-up from the front. The shoulder→hand distance seen from the front is close to the
+ * real one (both lie roughly in the image plane), while the elbow bends partly toward/away
+ * from the camera and its 2D angle is foreshortened. The driving value is therefore an
+ * EQUIVALENT elbow angle derived from r = d / L, where d = how far the shoulders are above
+ * the hands and L = the straight-arm value of d (robust, slowly decaying peak measured at
+ * the top; the image arm length until the first top is seen):
+ *   - r ≤ sin 60°: exact angle of a two-segment arm with equal segments, 2·asin(r)
+ *     (r = 0.707 → 90°, r = 0.766 → 100°);
+ *   - r > sin 60°: linear from 120° to 180°, because near full extension 2·asin(r) turns
+ *     1 % of measurement noise into ~10° and the top could never be recognised reliably.
+ */
+export function equivalentElbowAngle(r: number): number {
+  const knee = Math.sin(Math.PI / 3);
+  const c = Math.max(0, Math.min(1, r));
+  if (c <= knee) return (2 * Math.asin(c) * 180) / Math.PI;
+  return 120 + (60 * (c - knee)) / (1 - knee);
+}
+
+function frontPushupSpec(): Spec {
+  const HALF_LIFE_MS = 30000;
+  const state: Record<LR, { peak: number; peakT: number; recent: number[]; seenT: number }> = {
+    left: { peak: 0, peakT: 0, recent: [], seenT: -Infinity },
+    right: { peak: 0, peakT: 0, recent: [], seenT: -Infinity },
+  };
+  /** After this long without the arm in view the reference is measured again (person may have moved). */
+  const FORGET_AFTER_MS = 1500;
+  let now = 0;
+  const decayed = (s: { peak: number; peakT: number }) => s.peak * Math.pow(0.5, Math.max(0, now - s.peakT) / HALF_LIFE_MS);
+  return {
+    mode: 'both',
+    required: ['shoulder', 'elbow', 'wrist'],
+    optional: ['hip'],
+    setTime(t) {
+      now = t;
+    },
+    compute(p, side) {
+      const sh = p('shoulder');
+      const el = p('elbow');
+      const wr = p('wrist');
+      const elbow2d = angle(sh, el, wr);
+      const armImg = sum(dist(sh, el), dist(el, wr));
+      const d = sh && wr ? wr.y - sh.y : null;
+      // Standing upright with the arms hanging also has the hands below the shoulders.
+      // In a push-up seen from the front the hips are behind the shoulders, i.e. near
+      // shoulder height in the image – never most of an arm length below them.
+      const hp = p('hip');
+      const standing = !!(hp && sh && armImg !== null && hp.y - sh.y > 0.6 * armImg);
+      const posture = d === null || armImg === null ? null : d > 0.25 * armImg && !standing;
+
+      const st = state[side];
+      if (d !== null && now - st.seenT > FORGET_AFTER_MS) {
+        st.peak = 0;
+        st.recent = [];
+      }
+      if (d !== null) st.seenT = now;
+      if (posture && d !== null && elbow2d !== null && elbow2d >= 150) {
+        // Median of the last straight-arm frames: a single noisy frame cannot raise the peak.
+        st.recent.push(d);
+        if (st.recent.length > 15) st.recent.shift();
+        const sorted = [...st.recent].sort((a, b) => a - b);
+        const candidate = sorted[Math.floor(sorted.length / 2)];
+        const n = sorted.length;
+        const current = decayed(st);
+        // Raise the peak at once; lower it only when a whole, STABLE window (not a descent
+        // with foreshortened elbows) is clearly below it: the person moved away from the phone.
+        const movedAway = n === 15 && sorted[n - 1] < 0.9 * current && sorted[n - 1] - sorted[0] < 0.03 * current;
+        if ((st.recent.length >= 3 && candidate >= current) || movedAway) {
+          st.peak = candidate;
+          st.peakT = now;
+        }
+      }
+      const peak = decayed(st);
+      const ref = peak > 0 ? peak : (armImg ?? 0);
+      const ratio = d !== null && ref > 0 ? Math.max(0, Math.min(1, d / ref)) : null;
+      const equiv = ratio === null ? null : equivalentElbowAngle(ratio);
+      return { primary: equiv, values: { elbow: equiv, elbow2d, shoulderHeight: ratio }, posture };
+    },
+  };
+}
+
 /** Extracts the per-frame metrics of one exercise/variant with a sticky side choice. */
 export class MetricExtractor {
   private readonly spec: Spec;
@@ -211,6 +295,7 @@ export class MetricExtractor {
   }
 
   extract(view: FrameView): FrameMetrics {
+    this.spec.setTime?.(view.t);
     const sides = this.sides.select(view, this.spec.required);
     const better: LR = view.quality(this.spec.required, 'left') >= view.quality(this.spec.required, 'right') ? 'left' : 'right';
     const frontView = this.viewOf(view);
@@ -227,7 +312,7 @@ export class MetricExtractor {
         view: frontView,
       };
     }
-    const results = sides.map((s) => this.spec.compute((part) => view.get(part, s)));
+    const results = sides.map((s) => this.spec.compute((part) => view.get(part, s), s));
     // Average both sides only when both are measured; never mix with an occluded side.
     const avg = (vals: (number | null)[]): number | null => {
       let total = 0;

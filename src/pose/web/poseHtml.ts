@@ -15,10 +15,11 @@ export interface PoseHtmlConfig {
   assetsBase: string;
   modelUrl: string;
   facingMode: 'user' | 'environment';
-  debug: boolean;
-  /** MediaPipe landmark indices to highlight in the debug overlay. */
+  /** MediaPipe landmark indices used by the exercise (drawn larger in the skeleton). */
   highlight: number[];
+  /** Minimum visibility to draw a point: upper body / legs (hips, knees, ankles, feet). */
   minScore: number;
+  legMinScore: number;
 }
 
 export const DEFAULT_ASSETS_BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VISION_VERSION}`;
@@ -31,7 +32,7 @@ export function buildPoseHtml(config: PoseHtmlConfig): string {
   return `<!doctype html>
 <html><head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <style>
   html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden}
   #stage{position:absolute;inset:0}
@@ -60,10 +61,12 @@ const ctx = canvas.getContext('2d');
 const stage = document.getElementById('stage');
 if (cfg.facingMode === 'user') stage.classList.add('mirror');
 
-const EDGES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[0,2],[0,5],[2,7],[5,8]];
-const POINTS = [0,2,5,7,8,11,12,13,14,15,16,23,24,25,26,27,28];
-let debug = cfg.debug;
-window.__rc = { setDebug(v) { debug = !!v; if (!debug) ctx.clearRect(0, 0, canvas.width, canvas.height); } };
+// Body skeleton (no face mesh): arms, torso, legs and feet. Leg bones are drawn thicker.
+const EDGES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,29],[29,31],[27,31],[28,30],[30,32],[28,32]];
+const POINTS = [0,11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32];
+const isLeg = (i) => i >= 23;
+const minOf = (i) => (isLeg(i) ? cfg.legMinScore : cfg.minScore);
+const shown = (lm, i) => (lm[i].visibility ?? 0) >= minOf(i);
 
 function draw(lm) {
   const dpr = window.devicePixelRatio || 1;
@@ -76,17 +79,27 @@ function draw(lm) {
   const s = Math.max(cw / vw, ch / vh); // object-fit: cover
   const ox = (cw - vw * s) / 2, oy = (ch - vh * s) / 2;
   const P = (i) => [ox + lm[i].x * vw * s, oy + lm[i].y * vh * s, lm[i].visibility ?? 0];
-  ctx.lineWidth = 3;
-  for (const [a, b] of EDGES) {
-    const p = P(a), q = P(b);
-    ctx.strokeStyle = Math.min(p[2], q[2]) >= cfg.minScore ? '#22c55e' : 'rgba(249,115,22,0.6)';
-    ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke();
+  // Only confidently detected points are drawn (no red "uncertain" clutter).
+  ctx.lineCap = 'round';
+  for (const pass of [0, 1]) {
+    for (const [a, b] of EDGES) {
+      if (!shown(lm, a) || !shown(lm, b)) continue;
+      const p = P(a), q = P(b);
+      const w = isLeg(a) && isLeg(b) ? 6 : 4;
+      ctx.lineWidth = pass === 0 ? w + 3 : w;
+      ctx.strokeStyle = pass === 0 ? 'rgba(0,0,0,0.35)' : 'rgba(198,255,61,0.9)';
+      ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke();
+    }
   }
   for (const i of POINTS) {
+    if (!shown(lm, i)) continue;
     const p = P(i);
     const big = cfg.highlight.includes(i);
-    ctx.fillStyle = p[2] >= cfg.minScore ? (big ? '#2563eb' : '#60a5fa') : '#ef4444';
-    ctx.beginPath(); ctx.arc(p[0], p[1], big ? 7 : 4, 0, Math.PI * 2); ctx.fill();
+    const r = big ? 7 : 4.5;
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#C6FF3D';
+    ctx.lineWidth = big ? 3 : 2;
+    ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   }
 }
 
@@ -104,6 +117,12 @@ async function main() {
       baseOptions: { modelAssetPath: cfg.modelUrl, delegate },
       runningMode: 'VIDEO',
       numPoses: 1,
+      // Lower than the 0.5 defaults: the person is found sooner and kept while moving fast
+      // (e.g. legs at the bottom of the picture); weak points are still rejected later by
+      // the per-point visibility thresholds of the analysis.
+      minPoseDetectionConfidence: 0.35,
+      minPosePresenceConfidence: 0.35,
+      minTrackingConfidence: 0.35,
     });
     try { return { landmarker: await make('GPU'), delegate: 'GPU' }; }
     catch (e) { return { landmarker: await make('CPU'), delegate: 'CPU' }; }
@@ -146,7 +165,7 @@ async function main() {
         post({ type: 'status', state: 'ready', delegate });
       }
       post({ type: 'pose', t: t0, w: video.videoWidth, h: video.videoHeight, ms, lm: flat });
-      if (debug) draw(lm);
+      draw(lm);
     }
     requestAnimationFrame(tick);
   };

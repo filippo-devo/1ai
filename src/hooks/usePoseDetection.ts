@@ -20,7 +20,7 @@ const MODEL_ASSET = require('../../assets/models/movenet_singlepose_lightning_in
 export interface DetectedPose extends Pose {
   /**
    * Keypoints in the Camera coordinate system ([x0, y0, x1, y1, ...]) for the
-   * debug overlay; convert with the preview's convertCameraPointToViewPoint().
+   * skeleton overlay; convert with the preview's convertCameraPointToViewPoint().
    */
   cameraPoints: number[];
   inferenceMs: number;

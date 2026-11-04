@@ -8,10 +8,10 @@
  * re-validated on the test split of the recordings.
  */
 
-export const DETECTOR_VERSION = 'v2.0-2026-11-03';
+export const DETECTOR_VERSION = 'v2.1-2026-11-04';
 
 export type ExerciseId = 'squat' | 'plank' | 'pushup' | 'bench' | 'pullup' | 'abs' | 'jumprope';
-export type VariantId = 'standard' | 'knees' | 'crunch' | 'situp' | 'strict' | 'basic';
+export type VariantId = 'standard' | 'knees' | 'front' | 'crunch' | 'situp' | 'strict' | 'basic';
 
 export const EXERCISE_IDS: ExerciseId[] = ['squat', 'plank', 'pushup', 'bench', 'pullup', 'abs', 'jumprope'];
 
@@ -24,6 +24,17 @@ export const EXERCISE_IDS: ExerciseId[] = ['squat', 'plank', 'pushup', 'bench', 
 export const VISIBILITY: Record<'mediapipe' | 'movenet', number> = {
   mediapipe: 0.7,
   movenet: 0.3,
+};
+
+/**
+ * Lower thresholds for the legs (hips, knees, ankles, heels, toes). MediaPipe reports
+ * clearly lower "visibility" for legs than for the upper body (lower frame edge, the far
+ * leg in profile, dark trousers) even when they are plainly in the picture; with 0.7 the
+ * legs were dropped too often and the person was "acquired" slowly.
+ */
+export const LEG_VISIBILITY: Record<'mediapipe' | 'movenet', number> = {
+  mediapipe: 0.5,
+  movenet: 0.25,
 };
 
 /** Points closer than this (px) define no direction: angles become unavailable. */
@@ -124,6 +135,25 @@ export const CYCLIC: Record<string, CyclicConfig> = {
     minCycleMs: 350,
     minRestEnter: 150,
     calibStart: 145,
+  },
+  /**
+   * Push-up seen FROM THE FRONT (phone on the floor in front of the head). The elbow angle
+   * is foreshortened in this view, so the driving value is an EQUIVALENT elbow angle
+   * computed from how far the shoulders are above the hands relative to the straight-arm
+   * height measured at the top (see metrics.ts). Thresholds match the side view.
+   */
+  'pushup/front': {
+    ...strength,
+    direction: 'decrease',
+    mode: 'absolute',
+    restEnter: 160,
+    restExit: 150,
+    target: 100,
+    targetOptions: [110, 100, 90, 80],
+    minAmplitude: 25,
+    minCycleMs: 350,
+    minRestEnter: 145,
+    calibStart: 140,
   },
   'pushup/knees': {
     ...strength,

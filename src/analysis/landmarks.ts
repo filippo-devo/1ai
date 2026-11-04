@@ -1,5 +1,5 @@
 import { FOOT, KP, type Pose, type PoseSource } from '../pose/types';
-import { VISIBILITY } from './config';
+import { LEG_VISIBILITY, VISIBILITY } from './config';
 import type { P } from './geometry';
 
 export type Part = 'nose' | 'shoulder' | 'elbow' | 'wrist' | 'hip' | 'knee' | 'ankle' | 'heel' | 'toe';
@@ -31,6 +31,8 @@ const FEET: Partial<Record<Part, { left: number; right: number }>> = {
   toe: { left: FOOT.leftToe, right: FOOT.rightToe },
 };
 
+const LEG_PARTS = new Set<Part>(['hip', 'knee', 'ankle', 'heel', 'toe']);
+
 export interface Landmark extends P {
   score: number;
 }
@@ -44,6 +46,8 @@ export class FrameView {
   readonly t: number;
   readonly source: PoseSource;
   readonly minScore: number;
+  /** Threshold for leg points (hip, knee, ankle, heel, toe). */
+  readonly minLegScore: number;
 
   constructor(
     readonly pose: Pose,
@@ -52,6 +56,7 @@ export class FrameView {
     this.t = pose.timestamp;
     this.source = pose.source ?? 'movenet';
     this.minScore = minScoreOverride ?? VISIBILITY[this.source];
+    this.minLegScore = minScoreOverride ?? LEG_VISIBILITY[this.source];
   }
 
   private raw(part: Part, side: LR): Landmark | null {
@@ -78,7 +83,7 @@ export class FrameView {
   /** A usable point (score ≥ threshold and inside the frame) or null. */
   get(part: Part, side: LR): Landmark | null {
     const p = this.raw(part, side);
-    if (!p || !(p.score >= this.minScore)) return null;
+    if (!p || !(p.score >= (LEG_PARTS.has(part) ? this.minLegScore : this.minScore))) return null;
     const mx = 0.02 * this.pose.width;
     const my = 0.02 * this.pose.height;
     if (p.x < -mx || p.x > this.pose.width + mx || p.y < -my || p.y > this.pose.height + my) return null;

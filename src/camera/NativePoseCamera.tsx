@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Camera, useCameraDevice, useCameraPermission, type CameraRef } from 'react-native-vision-camera';
 import { SkeletonOverlay } from '../components/SkeletonOverlay';
-import { VISIBILITY } from '../analysis/config';
+import { LEG_VISIBILITY, VISIBILITY } from '../analysis/config';
 import { gpuResizerSupported, usePoseDetection, type DetectedPose as NativePose } from '../hooks/usePoseDetection';
 import type { Point } from '../pose/types';
 import { LoadingCover } from './LoadingCover';
@@ -10,7 +10,7 @@ import { cameraStyles as styles } from './styles';
 import type { PoseCameraProps } from './types';
 
 /** VisionCamera v5 + GPU Resizer + MoveNet (TFLite). Requires a development/preview build. */
-export function NativePoseCamera({ position, active, debug, highlight, onPose, onSwitchCamera }: PoseCameraProps) {
+export function NativePoseCamera({ position, active, highlight, onPose, onSwitchCamera }: PoseCameraProps) {
   const permission = useCameraPermission();
   const device = useCameraDevice(position);
   const cameraRef = useRef<CameraRef>(null);
@@ -36,7 +36,6 @@ export function NativePoseCamera({ position, active, debug, highlight, onPose, o
         inferenceMs: pose.inferenceMs,
         cropSize: pose.crop.size,
       });
-      if (!debug) return;
       const cam = cameraRef.current;
       const points: (Point | null)[] = [];
       for (let i = 0; i < 17; i++) {
@@ -50,7 +49,7 @@ export function NativePoseCamera({ position, active, debug, highlight, onPose, o
       }
       setOverlay({ points, scores: Array.from({ length: 17 }, (_, i) => pose.keypoints[i * 3 + 2]) });
     },
-    [onPose, debug],
+    [onPose],
   );
   const onDetectorError = useCallback((message: string) => setDetectorError(message), []);
   const { frameOutput, status } = usePoseDetection(handlePose, onDetectorError);
@@ -108,8 +107,8 @@ export function NativePoseCamera({ position, active, debug, highlight, onPose, o
         }}
         onError={(e) => setCameraError(`Błąd kamery: ${e.message}`)}
       />
-      {debug && overlay && (
-        <SkeletonOverlay points={overlay.points} scores={overlay.scores} minScore={VISIBILITY.movenet} highlight={highlight} />
+      {overlay && (
+        <SkeletonOverlay points={overlay.points} scores={overlay.scores} minScore={VISIBILITY.movenet} legMinScore={LEG_VISIBILITY.movenet} highlight={highlight} />
       )}
       {!fatal && (status.state === 'loading' || !previewStarted) && <LoadingCover />}
       {fatal && (

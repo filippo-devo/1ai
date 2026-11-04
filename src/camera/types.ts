@@ -11,8 +11,6 @@ export interface PoseCameraProps {
   position: 'back' | 'front';
   /** false = camera and processing stopped (screen not focused / app in background). */
   active: boolean;
-  /** Draw the skeleton overlay. */
-  debug: boolean;
   /** COCO keypoint indices (src/pose/types.ts) used by the current exercise, highlighted in the overlay. */
   highlight: number[];
   onPose: (pose: DetectedPose) => void;

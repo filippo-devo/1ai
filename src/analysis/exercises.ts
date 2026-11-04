@@ -28,6 +28,15 @@ export interface ExerciseInfo {
   notAssessable: string[];
   /** Criteria that would need a model/data the app does not have. */
   unavailable: string[];
+  /** Variant-specific replacements (e.g. a different camera view). */
+  variantOverrides?: Partial<Record<VariantId, Partial<Pick<ExerciseInfo, 'setup' | 'postureHint' | 'notAssessable' | 'targetLabel'>>>>;
+}
+
+/** Exercise info with the variant-specific texts applied. */
+export function exerciseInfo(id: ExerciseId, variant: VariantId): ExerciseInfo {
+  const base = EXERCISES[id];
+  const o = base.variantOverrides?.[variant];
+  return o ? { ...base, ...o } : base;
 }
 
 const COMMON_TIP = 'Telefon nieruchomo, bez skrajnej perspektywy (nie od dołu ani tuż przy ciele), potrzebne stawy przez cały czas w kadrze.';
@@ -79,11 +88,12 @@ export const EXERCISES: Record<ExerciseId, ExerciseInfo> = {
   pushup: {
     id: 'pushup',
     name: 'Pompka',
-    subtitle: 'Cykle i zakres · widok z boku',
+    subtitle: 'Cykle i zakres · z boku lub od przodu',
     icon: 'arm-flex',
     kind: 'reps',
     variants: [
-      { id: 'standard', label: 'Klasyczna' },
+      { id: 'standard', label: 'Z boku' },
+      { id: 'front', label: 'Od przodu' },
       { id: 'knees', label: 'Na kolanach' },
     ],
     restLabel: 'Góra',
@@ -100,6 +110,23 @@ export const EXERCISES: Record<ExerciseId, ExerciseInfo> = {
     postureHint: 'Przyjmij podpór bokiem do kamery, ręce proste.',
     notAssessable: ['Rozstaw dłoni i łokci', 'Symetria lewa–prawa'],
     unavailable: [],
+    variantOverrides: {
+      front: {
+        targetLabel: (v) => `łokieć ≤ ${v}° (szacowany z obniżenia barków)`,
+        setup: {
+          view: 'Widok od przodu – telefon na podłodze przed Twoją głową, ekranem do Ciebie.',
+          phone: 'Telefon pionowo, oparty stabilnie o coś na podłodze (lekko odchylony do tyłu).',
+          distance: 'Ok. 1–1,5 m przed dłońmi.',
+          inFrame: 'W kadrze: głowa, oba barki, łokcie i nadgarstki (dłonie na podłodze).',
+          tips: [
+            'Głębokość liczona jest z tego, jak nisko schodzą barki względem dłoni (porównanie z wyprostem na górze).',
+            COMMON_TIP,
+          ],
+        },
+        postureHint: 'Przyjmij podpór przodem do telefonu, ręce proste.',
+        notAssessable: ['Linia ciała / opadanie bioder (wymaga widoku z boku)', 'Rozstaw dłoni i łokci'],
+      },
+    },
   },
   bench: {
     id: 'bench',

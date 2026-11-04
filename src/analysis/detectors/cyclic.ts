@@ -83,7 +83,8 @@ function rulesFor(exercise: ExerciseId, variant: VariantId): Rules {
           }
           const kneelingShare = c.frames > 0 ? (c.ones.kneeOnFloor ?? 0) / c.frames : 0;
           let ok = c.targetValue;
-          if (drop === null || drop < TECHNIQUE.pushup.shoulderDropForTarget) {
+          // Front view: the driving value itself is the shoulder descent, no second check.
+          if (variant !== 'front' && (drop === null || drop < TECHNIQUE.pushup.shoulderDropForTarget)) {
             out.reasons.push('shoulders_not_descending');
             ok = false;
           }

@@ -4,7 +4,7 @@ import { DETECTOR_VERSION, HINTS, JUMP_MOVENET, TECHNIQUE, type ExerciseId, type
 import { CyclicDetector, type CyclicSnapshot } from './detectors/cyclic';
 import { JumpDetector, type JumpEvaluation, type JumpSnapshot, type JumpStats } from './detectors/jump';
 import { PlankDetector, type PlankSnapshot, type PlankStats } from './detectors/plank';
-import { EXERCISES } from './exercises';
+import { EXERCISES, exerciseInfo } from './exercises';
 import { HintEngine } from './hints';
 import { FrameView, PART_PL } from './landmarks';
 import { MetricExtractor, type FrameMetrics, type MeasuredSide } from './metrics';
@@ -172,11 +172,11 @@ export class ExerciseAnalyzer {
   }
 
   private hintCandidates(m: FrameMetrics, coverage: number, pl: PlankSnapshot | null, jp: JumpSnapshot | null, t: number): Hint[] {
-    const info = EXERCISES[this.exercise];
+    const info = exerciseInfo(this.exercise, this.variant);
     const out: Hint[] = [];
     if (m.primary === null) {
       const missing = m.missing.map((p) => PART_PL[p]).join(', ');
-      out.push({ id: 'frame', kind: 'setup', text: `Ustaw się w kadrze${missing ? ` · nie widać: ${missing}` : ''}` });
+      out.push({ id: 'frame', kind: 'setup', text: `Ustaw się w kadrze${missing ? ` (${missing})` : ''}` });
     } else if (coverage < HINTS.minCoverageForTechniqueHints) {
       out.push({ id: 'coverage', kind: 'setup', text: 'Słaby obraz – ustaw telefon stabilnie, popraw światło lub odległość' });
     }
@@ -213,7 +213,7 @@ export class ExerciseAnalyzer {
     const sides: Partial<Record<MeasuredSide, number>> = {};
     for (const c of done) if (c.side) sides[c.side] = (sides[c.side] ?? 0) + 1;
     const flags = new Set(cycles.flatMap((c) => c.flags));
-    const notAssessable = [...info.notAssessable];
+    const notAssessable = [...exerciseInfo(this.exercise, this.variant).notAssessable];
     if (this.exercise === 'pullup' && (flags.has('swing_not_assessable') || !cycles.length)) {
       notAssessable.push('Kołysanie (wymaga widoku z boku)');
     }

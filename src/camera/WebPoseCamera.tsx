@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
-import { VISIBILITY } from '../analysis/config';
+import { LEG_VISIBILITY, VISIBILITY } from '../analysis/config';
 import { COCO_FROM_MEDIAPIPE } from '../pose/mediapipe';
 import { webMessageToPose, type WebPoseMessage } from '../pose/web/messages';
 import { buildPoseHtml, DEFAULT_ASSETS_BASE, DEFAULT_MODEL_URL } from '../pose/web/poseHtml';
@@ -23,13 +23,9 @@ type PageMessage =
  * Expo Go engine: camera (getUserMedia) + MediaPipe Pose Landmarker inside a WebView.
  * Frames stay inside the WebView on the device; only landmark coordinates are posted out.
  */
-export function WebPoseCamera({ position, active, debug, highlight, onPose }: PoseCameraProps) {
-  // react-native-webview's typings default P to undefined (props become `never`); pass `object`.
-  const webRef = useRef<WebView<object>>(null);
+export function WebPoseCamera({ position, active, highlight, onPose }: PoseCameraProps) {
   const [status, setStatus] = useState<WebStatus>('loading');
   const [error, setError] = useState<string | null>(null);
-  const [initialDebug] = useState(debug);
-  const debugRef = useRef(debug);
 
   const html = useMemo(
     () =>
@@ -37,17 +33,12 @@ export function WebPoseCamera({ position, active, debug, highlight, onPose }: Po
         assetsBase: DEFAULT_ASSETS_BASE,
         modelUrl: DEFAULT_MODEL_URL,
         facingMode: position === 'front' ? 'user' : 'environment',
-        debug: initialDebug,
         highlight: highlight.map((i) => COCO_FROM_MEDIAPIPE[i]),
         minScore: VISIBILITY.mediapipe,
+        legMinScore: LEG_VISIBILITY.mediapipe,
       }),
-    [position, highlight, initialDebug],
+    [position, highlight],
   );
-
-  useEffect(() => {
-    debugRef.current = debug;
-    webRef.current?.injectJavaScript(`window.__rc && window.__rc.setDebug(${debug ? 'true' : 'false'}); true;`);
-  }, [debug]);
 
   const onMessage = (event: WebViewMessageEvent) => {
     let msg: PageMessage;
@@ -71,10 +62,16 @@ export function WebPoseCamera({ position, active, debug, highlight, onPose }: Po
 
   return (
     <View style={StyleSheet.absoluteFill}>
+      {/* react-native-webview's typings default P to undefined (props become `never`); pass `object`. */}
       <WebView<object>
         key={position}
-        ref={webRef}
         style={{ flex: 1, backgroundColor: 'black' }}
+        // iOS would otherwise inset the page by the status-bar area: a black strip at the top.
+        contentInsetAdjustmentBehavior="never"
+        automaticallyAdjustContentInsets={false}
+        scrollEnabled={false}
+        bounces={false}
+        overScrollMode="never"
         source={{ html, baseUrl: WEB_POSE_BASE_URL }}
         originWhitelist={['*']}
         javaScriptEnabled
@@ -82,11 +79,6 @@ export function WebPoseCamera({ position, active, debug, highlight, onPose }: Po
         mediaPlaybackRequiresUserAction={false}
         mediaCapturePermissionGrantType="grant"
         onMessage={onMessage}
-        onLoadEnd={() =>
-          webRef.current?.injectJavaScript(
-            `window.__rc && window.__rc.setDebug(${debugRef.current ? 'true' : 'false'}); true;`,
-          )
-        }
         onError={(e: { nativeEvent: { description: string } }) => {
           setStatus('error');
           setError(e.nativeEvent.description);

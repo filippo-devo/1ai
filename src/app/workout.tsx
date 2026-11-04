@@ -7,13 +7,11 @@ import { AppState, LayoutAnimation, PanResponder, Pressable, ScrollView, StyleSh
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CalibrationCollector, type CalibrationState } from '../analysis/calibration';
 import { CYCLIC, EXERCISE_IDS, type ExerciseId, type VariantId } from '../analysis/config';
-import { DEFAULT_VARIANT, EXERCISES } from '../analysis/exercises';
+import { DEFAULT_VARIANT, EXERCISES, exerciseInfo } from '../analysis/exercises';
 import { cocoIndices, FrameView, PART_PL, type Part } from '../analysis/landmarks';
 import { ExerciseAnalyzer, setLastResult, type AnalysisSnapshot } from '../analysis/session';
-import type { CycleRecord } from '../analysis/types';
 import { PoseCamera, POSE_ENGINE } from '../camera/PoseCamera';
 import type { DetectedPose } from '../camera/types';
-import { DebugPanel } from '../components/DebugPanel';
 import { colors, exerciseTint, radius, withAlpha } from '../ui/theme';
 import { formatDuration } from '../utils/format';
 
@@ -51,14 +49,13 @@ const cyclicConfig = (exercise: ExerciseId, variant: VariantId) => CYCLIC[`${exe
 export default function WorkoutScreen() {
   useKeepAwake();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ exercise: string; voice?: string; debug?: string }>();
+  const params = useLocalSearchParams<{ exercise: string; voice?: string }>();
   const exercise: ExerciseId = (EXERCISE_IDS as string[]).includes(params.exercise)
     ? (params.exercise as ExerciseId)
     : 'squat';
   const info = EXERCISES[exercise];
   const tint = exerciseTint[exercise];
   const voice = params.voice !== '0';
-  const [debug, setDebug] = useState(params.debug === '1');
   const source = POSE_ENGINE === 'native' ? 'movenet' : 'mediapipe';
 
   // --- camera lifecycle ------------------------------------------------------------------
@@ -86,14 +83,13 @@ export default function WorkoutScreen() {
   const analyzerRef = useRef<ExerciseAnalyzer | null>(null);
   const announcedRef = useRef(0);
   const [snapshot, setSnapshot] = useState<AnalysisSnapshot | null>(null);
-  const [lastPose, setLastPose] = useState<DetectedPose | null>(null);
-  const [perf, setPerf] = useState({ fps: 0, inferenceMs: 0 });
-  const [cycles, setCycles] = useState<CycleRecord[]>([]);
+  // UI state is only updated when something visible changes (not on every camera frame):
+  // re-rendering the whole screen 30× per second slowed the phone down.
+  const uiKeyRef = useRef({ calib: '', parts: '', snap: '' });
   const [countdown, setCountdown] = useState(COUNTDOWN_S);
   const [elapsedMs, setElapsedMs] = useState(0);
   const accumulatedMsRef = useRef(0);
   const activeSinceRef = useRef<number | null>(null);
-  const fpsRef = useRef({ lastT: 0, fps: 0 });
 
   const chooseVariant = (v: VariantId) => {
     setVariant(v);
@@ -105,22 +101,30 @@ export default function WorkoutScreen() {
   // --- pose handling (JS thread) ---------------------------------------------------------
   const onPose = useCallback(
     (pose: DetectedPose) => {
-      const s = fpsRef.current;
-      if (s.lastT > 0 && pose.timestamp > s.lastT) {
-        const inst = 1000 / (pose.timestamp - s.lastT);
-        s.fps = s.fps === 0 ? inst : s.fps * 0.9 + inst * 0.1;
-      }
-      s.lastT = pose.timestamp;
-
+      const keys = uiKeyRef.current;
       const st = stageRef.current;
       if (st === 'setup') {
-        setCalibration(calibrator.update(pose));
+        const cal = calibrator.update(pose);
+        const calKey = `${cal.status}|${Math.round(cal.progress * 20)}|${cal.missing.join(',')}|${cal.measuredRange?.cycles ?? 0}`;
+        if (calKey !== keys.calib) {
+          keys.calib = calKey;
+          setCalibration(cal);
+        }
         const view = new FrameView(pose);
-        const needed: Part[] = [...new Set<Part>([...EXERCISE_PARTS[exercise], ...(view.provides('toe') && exercise === 'jumprope' ? (['toe'] as Part[]) : [])])];
-        setParts(needed.map((part) => ({ part, visible: !!(view.get(part, 'left') || view.get(part, 'right')) })));
+        const needed: Part[] = [...new Set<Part>([...partsFor(exercise, variant), ...(view.provides('toe') && exercise === 'jumprope' ? (['toe'] as Part[]) : [])])];
+        const next = needed.map((part) => ({ part, visible: !!(view.get(part, 'left') || view.get(part, 'right')) }));
+        const partsKey = next.map((p) => `${p.part}${p.visible ? 1 : 0}`).join();
+        if (partsKey !== keys.parts) {
+          keys.parts = partsKey;
+          setParts(next);
+        }
       } else if (st === 'active' && analyzerRef.current) {
         const snap = analyzerRef.current.update(pose);
-        setSnapshot(snap);
+        const snapKey = `${snap.main.kind === 'time' ? Math.floor(snap.main.value / 1000) : snap.main.value}|${snap.state}|${snap.phase}|${snap.hint?.id ?? ''}|${JSON.stringify(snap.counts ?? null)}|${snap.plank ? Math.floor(snap.plank.stats.inToleranceMs / 250) + String(snap.plank.inTolerance) : ''}|${snap.jump ? snap.jump.state + snap.jump.stats.pauses : ''}`;
+        if (snapKey !== keys.snap) {
+          keys.snap = snapKey;
+          setSnapshot(snap);
+        }
         if (snap.plank) {
           const tens = Math.floor(snap.plank.stats.inToleranceMs / 10000);
           if (tens > announcedRef.current) {
@@ -129,10 +133,8 @@ export default function WorkoutScreen() {
           }
         }
       }
-      setLastPose(pose);
-      if (debug) setPerf({ fps: s.fps, inferenceMs: pose.inferenceMs });
     },
-    [exercise, calibrator, debug, voice],
+    [exercise, variant, calibrator, voice],
   );
 
   // --- timer (active time only, pauses excluded) ------------------------------------------
@@ -156,7 +158,6 @@ export default function WorkoutScreen() {
     });
     analyzer.cyclic?.onEvent((e) => {
       if (e.type !== 'cycle') return;
-      setCycles((prev) => [...prev.slice(-19), e.cycle]);
       if (e.cycle.outcome === 'target_reached') say(String(analyzer.cyclic?.snapshot().counts.targetReached ?? ''), voice);
     });
     analyzer.jump?.onJump((j) => {
@@ -165,7 +166,7 @@ export default function WorkoutScreen() {
     analyzerRef.current = analyzer;
     announcedRef.current = 0;
     setSnapshot(null);
-    setCycles([]);
+    uiKeyRef.current.snap = '';
     setCountdown(COUNTDOWN_S);
     say(String(COUNTDOWN_S), voice);
     goTo('countdown');
@@ -244,7 +245,7 @@ export default function WorkoutScreen() {
     setCalibration(null);
   };
 
-  const highlight = useMemo(() => cocoIndices(EXERCISE_PARTS[exercise]), [exercise]);
+  const highlight = useMemo(() => cocoIndices(partsFor(exercise, variant)), [exercise, variant]);
   const counting = stage === 'active' || stage === 'paused';
 
   return (
@@ -253,24 +254,10 @@ export default function WorkoutScreen() {
         <PoseCamera
           position={position}
           active={isActive}
-          debug={debug}
           highlight={highlight}
           onPose={onPose}
           onSwitchCamera={switchCamera}
         />
-
-        {debug && (
-          <DebugPanel
-            snapshot={snapshot}
-            calibration={calibration}
-            fps={perf.fps}
-            inferenceMs={perf.inferenceMs}
-            cropSize={lastPose?.cropSize ?? Number.NaN}
-            cycles={cycles}
-            engine={POSE_ENGINE === 'native' ? 'MoveNet (natywnie)' : 'MediaPipe (WebView, Expo Go)'}
-            top={insets.top + 64}
-          />
-        )}
 
         {stage === 'countdown' && (
           <View style={styles.countdownBox} pointerEvents="none">
@@ -301,20 +288,12 @@ export default function WorkoutScreen() {
           <RoundButton icon="close" label="Zamknij" onPress={() => router.back()} />
           <View style={styles.titlePill}>
             <MaterialCommunityIcons name={info.icon as IconName} size={18} color={tint} />
-            <Text style={styles.titleText}>
+            <Text style={styles.titleText} numberOfLines={1}>
               {info.name}
               {info.variants.length > 1 ? ` · ${info.variants.find((v) => v.id === variant)?.label}` : ''}
             </Text>
           </View>
-          <View style={styles.topRight}>
-            <RoundButton icon="camera-flip-outline" label="Przełącz kamerę" onPress={switchCamera} />
-            <RoundButton
-              icon="bug-outline"
-              label="Tryb debugowania"
-              onPress={() => setDebug((d) => !d)}
-              active={debug}
-            />
-          </View>
+          <RoundButton icon="camera-flip-outline" label="Przełącz kamerę" onPress={switchCamera} />
         </View>
       </View>
 
@@ -345,6 +324,11 @@ export default function WorkoutScreen() {
 }
 
 /** Parts shown in the setup visibility checklist / highlighted in the overlay. */
+function partsFor(exercise: ExerciseId, variant: VariantId): Part[] {
+  if (exercise === 'pushup' && variant === 'front') return ['shoulder', 'elbow', 'wrist'];
+  return EXERCISE_PARTS[exercise];
+}
+
 const EXERCISE_PARTS: Record<ExerciseId, Part[]> = {
   squat: ['shoulder', 'hip', 'knee', 'ankle'],
   plank: ['shoulder', 'elbow', 'wrist', 'hip', 'knee', 'ankle'],
@@ -504,7 +488,7 @@ function SetupPanel({
   onStart: () => void;
   onRecalibrate: () => void;
 }) {
-  const info = EXERCISES[exercise];
+  const info = exerciseInfo(exercise, variant);
   const tint = exerciseTint[exercise];
   const cfg = cyclicConfig(exercise, variant);
   const done = calibration?.status === 'done';
@@ -710,9 +694,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  topRight: { flexDirection: 'row', gap: 10 },
   roundButton: { backgroundColor: colors.overlay, alignItems: 'center', justifyContent: 'center' },
   titlePill: {
+    flexShrink: 1,
+    marginHorizontal: 10,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -721,14 +706,15 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 18,
   },
-  titleText: { color: colors.text, fontSize: 16, fontWeight: '700' },
+  titleText: { color: colors.text, fontSize: 16, fontWeight: '700', flexShrink: 1 },
 
   sheet: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: withAlpha(colors.surface, 0.94),
+    // Translucent: the legs/feet at the bottom of the picture stay visible through it.
+    backgroundColor: withAlpha(colors.bg, 0.78),
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
     maxHeight: '72%',
@@ -761,7 +747,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    backgroundColor: colors.surface2,
+    backgroundColor: withAlpha(colors.surface2, 0.55),
     borderRadius: radius.md,
     padding: 14,
   },

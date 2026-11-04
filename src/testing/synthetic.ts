@@ -100,6 +100,63 @@ export function pushupSkeleton(elbowDeg: number, body: Body, origin: Point): Ske
   };
 }
 
+/**
+ * Push-up seen FROM THE FRONT (phone on the floor in front of the head). The shoulders are
+ * exactly span(elbow) above the hands; the elbow bends partly sideways (`flare` share of
+ * the bend visible in the image) and partly toward the camera (invisible, foreshortened).
+ * Hips are behind the shoulders (slightly higher in the image), legs are not visible.
+ */
+export function pushupFrontSkeleton(elbowDeg: number, body: Body, origin: Point, flare = 0.5): Skeleton {
+  const floorY = origin.y;
+  const cx = origin.x - 0.15 * body.torso;
+  const sw = 1.2 * body.upperArm;
+  const d = span(body.upperArm, body.forearm, elbowDeg);
+  const out: Skeleton = {};
+  for (const [sideName, sign] of [['left', 1], ['right', -1]] as const) {
+    const wrist = { x: cx + sign * (sw / 2 + 0.15 * body.upperArm), y: floorY };
+    const shoulder = { x: cx + sign * (sw / 2), y: floorY - d };
+    // Elbow: point at distance upperArm from the shoulder and forearm from the wrist.
+    const along = (body.upperArm * body.upperArm - body.forearm * body.forearm + d * d) / (2 * d);
+    const h = Math.sqrt(Math.max(0, body.upperArm * body.upperArm - along * along));
+    const base = { x: shoulder.x + ((wrist.x - shoulder.x) * along) / d, y: shoulder.y + ((wrist.y - shoulder.y) * along) / d };
+    const elbow = { x: base.x + sign * flare * h, y: base.y };
+    const hip = { x: cx + sign * 0.35 * sw, y: shoulder.y - 0.1 * body.torso };
+    if (sideName === 'left') {
+      out.leftShoulder = shoulder;
+      out.leftElbow = elbow;
+      out.leftWrist = wrist;
+      out.leftHip = hip;
+    } else {
+      out.rightShoulder = shoulder;
+      out.rightElbow = elbow;
+      out.rightWrist = wrist;
+      out.rightHip = hip;
+    }
+  }
+  out.nose = { x: cx, y: floorY - d + 0.12 * body.torso };
+  return out;
+}
+
+/** Standing, facing the camera, arms hanging (must NOT look like the top of a front push-up). */
+export function standingFrontSkeleton(_deg: number, body: Body, origin: Point): Skeleton {
+  const cx = origin.x - 0.15 * body.torso;
+  const sw = 1.2 * body.upperArm;
+  const shY = origin.y - body.shin - body.thigh - body.torso;
+  const out: Skeleton = { nose: { x: cx, y: shY - 0.3 * body.torso } };
+  for (const [sideName, sign] of [['left', 1], ['right', -1]] as const) {
+    const shoulder = { x: cx + sign * sw / 2, y: shY };
+    const elbow = { x: shoulder.x + sign * 4, y: shY + body.upperArm };
+    const wrist = { x: shoulder.x + sign * 6, y: shY + body.upperArm + body.forearm };
+    const hip = { x: cx + sign * 0.35 * sw, y: shY + body.torso };
+    const knee = { x: hip.x, y: hip.y + body.thigh };
+    const ankle = { x: hip.x, y: knee.y + body.shin };
+    Object.assign(out, sideName === 'left'
+      ? { leftShoulder: shoulder, leftElbow: elbow, leftWrist: wrist, leftHip: hip, leftKnee: knee, leftAnkle: ankle }
+      : { rightShoulder: shoulder, rightElbow: elbow, rightWrist: wrist, rightHip: hip, rightKnee: knee, rightAnkle: ankle });
+  }
+  return out;
+}
+
 /** Squat, side view. Person faces +x. */
 export function squatSkeleton(kneeDeg: number, body: Body, origin: Point): Skeleton {
   const flex = 180 - kneeDeg;

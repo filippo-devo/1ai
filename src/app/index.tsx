@@ -13,10 +13,9 @@ type IconName = keyof typeof MaterialCommunityIcons.glyphMap;
 
 export default function ExerciseSelectScreen() {
   const [voice, setVoice] = useState(true);
-  const [debug, setDebug] = useState(false);
 
   const open = (id: ExerciseId) =>
-    router.push({ pathname: '/workout', params: { exercise: id, voice: voice ? '1' : '0', debug: debug ? '1' : '0' } });
+    router.push({ pathname: '/workout', params: { exercise: id, voice: voice ? '1' : '0' } });
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom', 'left', 'right']}>
@@ -48,8 +47,6 @@ export default function ExerciseSelectScreen() {
 
       <View style={styles.settings}>
         <SettingRow icon="volume-high" label="Odczyt głosowy" value={voice} onChange={setVoice} />
-        <View style={styles.divider} />
-        <SettingRow icon="bug-outline" label="Tryb debugowania" value={debug} onChange={setDebug} />
       </View>
     </SafeAreaView>
   );

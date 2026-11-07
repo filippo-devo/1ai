@@ -5,7 +5,7 @@ import { SkeletonOverlay } from '../components/SkeletonOverlay';
 import { LEG_VISIBILITY, VISIBILITY } from '../analysis/config';
 import { gpuResizerSupported, usePoseDetection, type DetectedPose as NativePose } from '../hooks/usePoseDetection';
 import type { Point } from '../pose/types';
-import { LoadingCover } from './LoadingCover';
+import { DetectionSpinner, LoadingCover } from './LoadingCover';
 import { cameraStyles as styles } from './styles';
 import type { PoseCameraProps } from './types';
 
@@ -110,7 +110,9 @@ export function NativePoseCamera({ position, active, highlight, onPose, onSwitch
       {overlay && (
         <SkeletonOverlay points={overlay.points} scores={overlay.scores} minScore={VISIBILITY.movenet} legMinScore={LEG_VISIBILITY.movenet} highlight={highlight} />
       )}
-      {!fatal && (status.state === 'loading' || !previewStarted) && <LoadingCover />}
+      {/* Picture as soon as the preview runs; the model may still be loading (small spinner). */}
+      {!fatal && !previewStarted && <LoadingCover />}
+      {!fatal && previewStarted && status.state === 'loading' && <DetectionSpinner />}
       {fatal && (
         <View style={[styles.banner, styles.bannerError]}>
           <Text style={styles.bannerText}>{fatal}</Text>

@@ -1,5 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useIsFocused } from 'expo-router';
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -13,13 +13,14 @@ type IconName = keyof typeof MaterialCommunityIcons.glyphMap;
 
 export default function ExerciseSelectScreen() {
   const [voice, setVoice] = useState(true);
+  const focused = useIsFocused();
 
   const open = (id: ExerciseId) =>
     router.push({ pathname: '/workout', params: { exercise: id, voice: voice ? '1' : '0' } });
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom', 'left', 'right']}>
-      {POSE_ENGINE === 'web' && <PrefetchPoseAssets />}
+      {POSE_ENGINE === 'web' && focused && <PrefetchPoseAssets />}
       <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
         {EXERCISE_IDS.map((id) => {
           const ex = EXERCISES[id];

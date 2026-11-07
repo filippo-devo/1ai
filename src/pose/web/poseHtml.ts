@@ -14,6 +14,8 @@ export interface PoseHtmlConfig {
   /** Base URL of the @mediapipe/tasks-vision package (vision_bundle.mjs + wasm/). */
   assetsBase: string;
   modelUrl: string;
+  /** Faster-to-download model used until the full one is in the cache (first run only). */
+  liteModelUrl: string;
   facingMode: 'user' | 'environment';
   /** MediaPipe landmark indices used by the exercise (drawn larger in the skeleton). */
   highlight: number[];
@@ -25,6 +27,42 @@ export interface PoseHtmlConfig {
 export const DEFAULT_ASSETS_BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VISION_VERSION}`;
 export const DEFAULT_MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task';
+/** Smaller (5.8 MB vs 9.4 MB) and faster model used only to start quickly on the very first run. */
+export const DEFAULT_LITE_MODEL_URL =
+  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+
+/**
+ * JS shared by the camera page and the prefetch page: a PERSISTENT asset cache (Cache
+ * Storage of the page origin, unlike the HTTP cache it is not evicted after max-age=3600
+ * or for large files) and the choice of the WebAssembly build (SIMD or not, as MediaPipe does).
+ */
+const ASSET_JS = `
+const ASSET_CACHE = 'rc-assets-v1';
+let cacheP = null;
+const openCache = () => (cacheP ??= (self.caches ? caches.open(ASSET_CACHE).catch(() => null) : Promise.resolve(null)));
+async function isCached(url) {
+  const c = await openCache();
+  return !!(c && (await c.match(url)));
+}
+/** Bytes of url: from the persistent cache, else downloaded once and stored. */
+async function cachedBytes(url) {
+  const c = await openCache();
+  if (c) {
+    const hit = await c.match(url);
+    if (hit) return hit.arrayBuffer();
+  }
+  const r = await fetch(url, { mode: 'cors' });
+  if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
+  const buf = await r.arrayBuffer();
+  if (c) await c.put(url, new Response(buf.slice(0), { headers: { 'content-type': 'application/octet-stream' } })).catch(() => {});
+  return buf;
+}
+const SIMD_TEST = new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11]);
+async function wasmName() {
+  try { await WebAssembly.instantiate(SIMD_TEST); return 'vision_wasm_internal'; }
+  catch { return 'vision_wasm_nosimd_internal'; }
+}
+`;
 
 export function buildPoseHtml(config: PoseHtmlConfig): string {
   // JSON.stringify output is safe inside a <script> as long as "</" is escaped.
@@ -103,31 +141,52 @@ function draw(lm) {
   }
 }
 
+${ASSET_JS}
+const toUrl = (buf, type) => URL.createObjectURL(new Blob([buf], { type }));
+const OPTIONS = {
+  runningMode: 'VIDEO',
+  numPoses: 1,
+  // Lower than the 0.5 defaults: the person is found sooner and kept while moving fast;
+  // weak points are still rejected later by the per-point visibility thresholds.
+  minPoseDetectionConfidence: 0.35,
+  minPosePresenceConfidence: 0.35,
+  minTrackingConfidence: 0.35,
+};
+
 async function main() {
   post({ type: 'status', state: 'loading' });
-  // Camera and model load IN PARALLEL (the model is ~10 MB + ~13 MB WebAssembly on first use;
-  // afterwards both come from the cache).
+  // 1) Camera, library, WebAssembly and model are all requested AT ONCE (MediaPipe on its
+  //    own would download the WebAssembly and the model one after the other).
   const camera = navigator.mediaDevices
     .getUserMedia({ audio: false, video: { facingMode: cfg.facingMode, width: { ideal: 640 }, height: { ideal: 480 } } })
     .then((stream) => ({ stream }), (e) => ({ error: e }));
-  const model = (async () => {
-    const vision = await import(cfg.assetsBase + '/vision_bundle.mjs');
-    const fileset = await vision.FilesetResolver.forVisionTasks(cfg.assetsBase + '/wasm');
-    const make = (delegate) => vision.PoseLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: cfg.modelUrl, delegate },
-      runningMode: 'VIDEO',
-      numPoses: 1,
-      // Lower than the 0.5 defaults: the person is found sooner and kept while moving fast
-      // (e.g. legs at the bottom of the picture); weak points are still rejected later by
-      // the per-point visibility thresholds of the analysis.
-      minPoseDetectionConfidence: 0.35,
-      minPosePresenceConfidence: 0.35,
-      minTrackingConfidence: 0.35,
-    });
-    try { return { landmarker: await make('GPU'), delegate: 'GPU' }; }
-    catch (e) { return { landmarker: await make('CPU'), delegate: 'CPU' }; }
-  })();
+  const fullCached = await isCached(cfg.modelUrl);
+  // First run: start with the small model, fetch the full one in the background.
+  const startModelUrl = fullCached ? cfg.modelUrl : cfg.liteModelUrl;
+  const name = await wasmName();
+  const bundleP = cachedBytes(cfg.assetsBase + '/vision_bundle.mjs');
+  const loaderP = cachedBytes(cfg.assetsBase + '/wasm/' + name + '.js');
+  const wasmP = cachedBytes(cfg.assetsBase + '/wasm/' + name + '.wasm');
+  const modelP = cachedBytes(startModelUrl);
+  const filesetP = Promise.all([loaderP, wasmP]).then(([loader, wasm]) => ({
+    wasmLoaderPath: toUrl(loader, 'text/javascript'),
+    wasmBinaryPath: toUrl(wasm, 'application/wasm'),
+  }));
+  const visionP = bundleP.then((b) => import(toUrl(b, 'text/javascript')));
+  let delegate = 'GPU';
+  const make = async (modelBuf) => {
+    const [vision, fileset] = await Promise.all([visionP, filesetP]);
+    const opts = (d) => ({ ...OPTIONS, baseOptions: { modelAssetBuffer: new Uint8Array(modelBuf), delegate: d } });
+    if (delegate === 'GPU') {
+      try { return await vision.PoseLandmarker.createFromOptions(fileset, opts('GPU')); }
+      catch (e) { delegate = 'CPU'; }
+    }
+    return vision.PoseLandmarker.createFromOptions(fileset, opts('CPU'));
+  };
+  const landmarkerP = modelP.then(make);
+  landmarkerP.catch(() => {});
 
+  // 2) Show the picture as soon as the camera runs; detection joins when the model is ready.
   const cam = await camera;
   if (cam.error) {
     const e = cam.error;
@@ -136,17 +195,35 @@ async function main() {
     return;
   }
   video.srcObject = cam.stream;
-  const playing = video.play();
-  const { landmarker, delegate } = await model;
-  await playing;
+  await video.play().catch(() => {});
+  stage.classList.remove('loading');
+  post({ type: 'status', state: 'camera' });
+
+  let landmarker = await landmarkerP;
+  if (!fullCached) {
+    // 3) Upgrade to the full model in the background (cached for every later start).
+    cachedBytes(cfg.modelUrl)
+      .then(make)
+      .then((full) => { const old = landmarker; landmarker = full; old.close(); post({ type: 'status', state: 'model', model: 'full' }); })
+      .catch(() => {});
+  }
 
   let lastTime = -1;
+  let tickError = false;
   let first = true;
   const tick = () => {
     if (video.readyState >= 2 && video.currentTime !== lastTime && video.videoWidth > 0) {
       lastTime = video.currentTime;
       const t0 = performance.now();
-      const res = landmarker.detectForVideo(video, t0);
+      let res;
+      try {
+        res = landmarker.detectForVideo(video, t0);
+      } catch (e) {
+        // Never let one failed frame stop the loop.
+        if (!tickError) { tickError = true; post({ type: 'log', message: 'detect: ' + String(e && e.message || e) }); }
+        requestAnimationFrame(tick);
+        return;
+      }
       const ms = performance.now() - t0;
       const lm = res.landmarks && res.landmarks[0];
       let flat = null;
@@ -159,10 +236,8 @@ async function main() {
         }
       }
       if (first) {
-        // Show the picture only now: camera running, model loaded, first frame analysed.
         first = false;
-        stage.classList.remove('loading');
-        post({ type: 'status', state: 'ready', delegate });
+        post({ type: 'status', state: 'ready', delegate, model: fullCached ? 'full' : 'lite' });
       }
       post({ type: 'pose', t: t0, w: video.videoWidth, h: video.videoHeight, ms, lm: flat });
       draw(lm);
@@ -177,20 +252,24 @@ main().catch((e) => post({ type: 'error', message: String(e && e.message || e) }
 }
 
 /**
- * Invisible page that only downloads the MediaPipe library, WebAssembly and model into
- * the WebView HTTP cache (no camera), so opening an exercise later starts quickly.
- * Uses the same base URL as the camera page (WebKit partitions its cache per site).
+ * Invisible page that only downloads the MediaPipe library, WebAssembly and the full model
+ * into the persistent asset cache (no camera), so opening an exercise later starts quickly.
+ * Same base URL (origin) as the camera page, so both use the same cache.
  */
 export function buildPrefetchHtml(assetsBase: string = DEFAULT_ASSETS_BASE, modelUrl: string = DEFAULT_MODEL_URL): string {
-  const urls = JSON.stringify([
-    `${assetsBase}/vision_bundle.mjs`,
-    `${assetsBase}/wasm/vision_wasm_internal.js`,
-    `${assetsBase}/wasm/vision_wasm_internal.wasm`,
-    modelUrl,
-  ]).replace(/</g, '\\u003c');
+  const cfg = JSON.stringify({ assetsBase, modelUrl }).replace(/</g, '\\u003c');
   return `<!doctype html><html><head><meta charset="utf-8"></head><body><script>
-const post = (o) => window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(o));
-Promise.all(${urls}.map((u) => fetch(u, { cache: 'force-cache', mode: 'cors' }).then((r) => r.arrayBuffer())))
-  .then(() => post({ type: 'prefetch', ok: true }), (e) => post({ type: 'prefetch', ok: false, message: String(e) }));
+const cfg = ${cfg};
+const post = (o) => {
+  const s = JSON.stringify(o);
+  if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(s);
+  else if (window.__rcPost) window.__rcPost(s);
+};
+${ASSET_JS}
+(async () => {
+  const name = await wasmName();
+  const urls = [cfg.assetsBase + '/vision_bundle.mjs', cfg.assetsBase + '/wasm/' + name + '.js', cfg.assetsBase + '/wasm/' + name + '.wasm', cfg.modelUrl];
+  await Promise.all(urls.map(cachedBytes));
+})().then(() => post({ type: 'prefetch', ok: true }), (e) => post({ type: 'prefetch', ok: false, message: String(e) }));
 </script></body></html>`;
 }

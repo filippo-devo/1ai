@@ -8,15 +8,17 @@ let prefetched = false;
 
 /**
  * Expo Go engine only: while the user is on the exercise list, an invisible WebView downloads
- * the MediaPipe library, WebAssembly and pose model into the WebView cache (no camera access).
- * When an exercise is opened the camera page then loads them from the cache instead of the network.
+ * the MediaPipe library, WebAssembly and pose model into a persistent cache (no camera access).
+ * When an exercise is opened the camera page loads them from there instead of the network.
+ * Mount it only while the list is on screen: leaving it stops the prefetch, so it never
+ * competes with the camera page for bandwidth (finished files stay cached).
  */
 export function PrefetchPoseAssets() {
   const [done, setDone] = useState(prefetched);
   const [html] = useState(() => buildPrefetchHtml());
   if (done) return null;
-  const finish = () => {
-    prefetched = true;
+  const finish = (ok: boolean) => {
+    if (ok) prefetched = true;
     setDone(true);
   };
   return (
@@ -25,8 +27,14 @@ export function PrefetchPoseAssets() {
         source={{ html, baseUrl: WEB_POSE_BASE_URL }}
         originWhitelist={['*']}
         javaScriptEnabled
-        onMessage={finish}
-        onError={finish}
+        onMessage={(e) => {
+          try {
+            finish((JSON.parse(e.nativeEvent.data) as { ok?: boolean }).ok === true);
+          } catch {
+            finish(false);
+          }
+        }}
+        onError={() => finish(false)}
       />
     </View>
   );

@@ -43,7 +43,7 @@ plik i porówna SHA-256.
 
 | Gdzie działa aplikacja | Silnik | Szczegóły |
 |---|---|---|
-| **Expo Go** (iPhone/Android, bez własnego buildu) | MediaPipe Pose Landmarker w WebView | kamera przez `getUserMedia`, model `pose_landmarker_full` (Google), WebAssembly/WebGL na telefonie; biblioteka `@mediapipe/tasks-vision@1.1.1` (~13,5 MB WebAssembly) i model (~9,4 MB) pobierane w tle już na ekranie wyboru ćwiczeń, potem z pamięci podręcznej WebView; kamera i model ładują się równolegle, obraz pokazuje się dopiero po przeanalizowaniu pierwszej klatki (do tego czasu czarny ekran ze wskaźnikiem); obraz nie opuszcza telefonu |
+| **Expo Go** (iPhone/Android, bez własnego buildu) | MediaPipe Pose Landmarker w WebView | kamera przez `getUserMedia`, model `pose_landmarker_full` (Google), WebAssembly/WebGL na telefonie; biblioteka `@mediapipe/tasks-vision@1.1.1` (~13,5 MB WebAssembly) i model (~9,4 MB) pobierane w tle na ekranie wyboru ćwiczeń do **trwałej** pamięci (Cache Storage strony – nie wygasa jak cache HTTP po `max-age=3600`); kamera, biblioteka, WebAssembly i model pobierane **równolegle**; obraz z kamery widać od razu (~0,2 s), a wykrywanie dołącza, gdy model jest gotowy (mały wskaźnik). Przy pierwszym uruchomieniu bez pobranego modelu start na modelu *lite* (5,8 MB), pełny dociągany w tle i podmieniany; obraz nie opuszcza telefonu |
 | **Build EAS** (development / preview) | MoveNet Lightning (TFLite) przez VisionCamera | natywnie, szybciej, bez pobierania modelu |
 
 Wybór robi `src/camera/PoseCamera.tsx`: jeśli w aplikacji jest natywny moduł Nitro → silnik natywny,
